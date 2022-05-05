@@ -76,7 +76,7 @@ class Pool(nn.Module):
         return self.act(self.bn(self.conv(self.pool(x))))
 
 
-class Shrink(nn.Module):
+class Reshape(nn.Module):
     def __init__(self, c1, c2, k=1, s=1, act=True):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s)
@@ -84,7 +84,7 @@ class Shrink(nn.Module):
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
-        return self.act(self.bn(self.conv))
+        return self.act(self.bn(self.conv(x)))
 
 
 class ECA(nn.Module):
@@ -94,7 +94,7 @@ class ECA(nn.Module):
         k_size: Adaptive selection of kernel size
     """
 
-    def __init__(self, c1,c2, k_size=3):
+    def __init__(self, c1, c2, k_size=3):
         super(ECA, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
@@ -118,8 +118,8 @@ class ECA(nn.Module):
 
 
 class CropLayer(nn.Module):
-
-    #   E.g., (-1, 0) means this layer should crop the first and last rows of the feature map. And (0, -1) crops the first and last columns
+    # E.g., (-1, 0) means this layer should crop the first and last rows of the feature map.
+    # And (0, -1) crops the first and last columns
     def __init__(self, crop_set):
         super(CropLayer, self).__init__()
         self.rows_to_crop = - crop_set[0]
@@ -132,17 +132,13 @@ class CropLayer(nn.Module):
 
 
 class ACBlock(nn.Module):
-    def __init__(self, c1, c2, kernel_size, stride=1, padding=1, dilation=1, groups=1, padding_mode='zeros', deploy=False):
+    def __init__(self, c1, c2, kernel_size, stride, padding, deploy=False, dilation=1, groups=1, padding_mode='zeros'):
         super(ACBlock, self).__init__()
         self.deploy = deploy
         if deploy:
-            self.fused_conv = nn.Conv2d(c1, c2, kernel_size=(kernel_size,kernel_size), stride=stride,
-                                      padding=padding, dilation=dilation, groups=groups, bias=True, padding_mode=padding_mode)
+            self.fused_conv = DSConv(c1, c2, kernel_size, stride, padding, dilation)
         else:
-            self.square_conv = nn.Conv2d(c1, c2,
-                                         kernel_size=(kernel_size, kernel_size), stride=stride,
-                                         padding=padding, dilation=dilation, groups=groups, bias=False,
-                                         padding_mode=padding_mode)
+            self.square_conv = DSConv(c1, c2, kernel_size, stride, padding, dilation)
             self.square_bn = nn.BatchNorm2d(num_features=c2)
 
             center_offset_from_origin_border = padding - kernel_size // 2
@@ -158,15 +154,8 @@ class ACBlock(nn.Module):
                 ver_conv_padding = (0, 0)
                 self.hor_conv_crop_layer = CropLayer(crop_set=hor_pad_or_crop)
                 hor_conv_padding = (0, 0)
-            self.ver_conv = nn.Conv2d(c1, c2, kernel_size=(3, 1),
-                                      stride=stride,
-                                      padding=ver_conv_padding, dilation=dilation, groups=groups, bias=False,
-                                      padding_mode=padding_mode)
-
-            self.hor_conv = nn.Conv2d(c1, c2, kernel_size=(1, 3),
-                                      stride=stride,
-                                      padding=hor_conv_padding, dilation=dilation, groups=groups, bias=False,
-                                      padding_mode=padding_mode)
+            self.ver_conv = DSConv(c1, c2, (3, 1), stride, ver_conv_padding, dilation)
+            self.hor_conv = DSConv(c1, c2, (1, 3), stride, hor_conv_padding, dilation)
             self.ver_bn = nn.BatchNorm2d(num_features=c2)
             self.hor_bn = nn.BatchNorm2d(num_features=c2)
 
@@ -194,6 +183,18 @@ class DWConv(Conv):
     # Depth-wise convolution class
     def __init__(self, c1, c2, k=1, s=1, act=True):  # ch_in, ch_out, kernel, stride, padding, groups
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), act=act)
+
+
+class DSConv(nn.Module):
+    def __init__(self, c1, c2, k, s, p, d=1, act=True):
+        super(DSConv, self).__init__()
+        self.DConv = nn.Conv2d(c1, c1, k, s, p, d, c1)
+        self.PConv = nn.Conv2d(c1, c2, 1)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+
+    def forward(self, x):
+        return self.act(self.bn(self.PConv(self.DConv(x))))
 
 
 class TransformerLayer(nn.Module):
