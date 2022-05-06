@@ -88,13 +88,12 @@ class Reshape(nn.Module):
 
 
 class ECA(nn.Module):
-    """Constructs a ECA module.
+    """Constructs an ECA module.
     Args:
-        channel: Number of channels of the input feature map
         k_size: Adaptive selection of kernel size
     """
 
-    def __init__(self, c1, c2, k_size=3):
+    def __init__(self, k_size=3):
         super(ECA, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
@@ -107,8 +106,8 @@ class ECA(nn.Module):
         # print(y.shape,y.squeeze(-1).shape,y.squeeze(-1).transpose(-1, -2).shape)
         # Two different branches of ECA module
         # 50*C*1*1
-        #50*C*1
-        #50*1*C
+        # 50*C*1
+        # 50*1*C
         y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
 
         # Multi-scale information fusion

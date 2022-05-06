@@ -120,3 +120,7 @@ def attempt_load(weights, map_location=None, inplace=True, fuse=True):
         model.stride = model[torch.argmax(torch.tensor([m.stride.max() for m in model])).int()].stride  # max stride
         assert all(model[0].nc == m.nc for m in model), f'Models have different class counts: {[m.nc for m in model]}'
         return model  # return ensemble
+
+
+# TODO add poolformer block into model
+# class Poolformer():
