@@ -89,6 +89,10 @@ parameters:
     distribution: uniform
     min: 0.0
     max: 4.0
+  pl_epsilon:
+    distribution: uniform
+    min: 0.0
+    max: 4.0
   hsv_h:
     distribution: uniform
     min: 0.0

@@ -5,9 +5,6 @@ Loss functions
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch import Tensor
-from typing import Callable, Optional, Tuple, Union
 
 from utils.metrics import bbox_iou
 from utils.torch_utils import de_parallel
@@ -65,59 +62,35 @@ class FocalLoss(nn.Module):
             return loss
 
 
-def poly_loss(
-        x: Tensor,
-        target: Tensor,
-        eps: float = 2.,
-        weight: Optional[Tensor] = None,
-        ignore_index: int = -100,
-        reduction: str = 'mean',
-) -> Tensor:
-    """Implements the Poly1 loss from `"PolyLoss: A Polynomial Expansion Perspective of Classification Loss
-    Functions" <https://arxiv.org/pdf/2204.12511.pdf>`_.
+class PloyLoss(nn.Module):
+    def __init__(self, loss_fcn, gamma=2.0, alpha=0.25, epsilon=1.0):
+        super().__init__()
+        self.loss_fcn = loss_fcn  # must be nn.BCEWithLogitsLoss()
+        self.gamma = gamma
+        self.alpha = alpha
+        self.epsilon = epsilon
+        self.reduction = loss_fcn.reduction
+        self.loss_fcn.reduction = 'none'  # required to apply FL to each element
 
-    Args:
-        x (torch.Tensor[N, K, ...]): predicted probability
-        target (torch.Tensor[N, K, ...]): target probability
-        eps (float, optional): epsilon 1 from the paper
-        weight (torch.Tensor[K], optional): manual rescaling of each class
-        ignore_index (int, optional): specifies target value that is ignored and do not contribute to gradient
-        reduction (str, optional): reduction method
+    def forward(self, pred, true):
+        loss = self.loss_fcn(pred, true)
+        # p_t = torch.exp(-loss)
+        # loss *= self.alpha * (1.000001 - p_t) ** self.gamma  # non-zero power for gradient stability
 
-    Returns:
-        torch.Tensor: loss reduced with `reduction` method
-    """
+        # TF implementation https://github.com/tensorflow/addons/blob/v0.7.1/tensorflow_addons/losses/focal_loss.py
+        pred_prob = torch.sigmoid(pred)  # prob from logits
+        p_t = true * pred_prob + (1 - true) * (1 - pred_prob)
+        alpha_factor = true * self.alpha + (1 - true) * (1 - self.alpha)
+        modulating_factor = (1.0 - p_t) ** self.gamma
+        loss *= alpha_factor * modulating_factor
+        loss = loss + self.epsilon * (1 - p_t)
 
-    # log(P[class]) = log_softmax(score)[class]
-    logpt = F.log_softmax(x, dim=1)
-
-    #  Compute pt and logpt only for target classes (the remaining will have a 0 coefficient)
-    logpt = logpt.transpose(1, 0).flatten(1).gather(0, target.view(1, -1)).squeeze()
-    # Ignore index (set loss contribution to 0)
-    valid_idxs = torch.ones(target.view(-1).shape[0], dtype=torch.bool, device=x.device)
-    if ignore_index >= 0 and ignore_index < x.shape[1]:
-        valid_idxs[target.view(-1) == ignore_index] = False
-
-    # Get P(class)
-    loss = -1 * logpt + eps * (1 - logpt.exp())
-
-    # Weight
-    if weight is not None:
-        # Tensor type
-        if weight.type() != x.data.type():
-            weight = weight.type_as(x.data)
-        logpt = weight.gather(0, target.data.view(-1)) * logpt
-
-    # Loss reduction
-    if reduction == 'sum':
-        loss = loss[valid_idxs].sum()
-    elif reduction == 'mean':
-        loss = loss[valid_idxs].mean()
-    else:
-        # if no reduction, reshape tensor like target
-        loss = loss.view(*target.shape)
-
-    return loss
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:  # 'none'
+            return loss
 
 
 class QFocalLoss(nn.Module):
@@ -163,8 +136,9 @@ class ComputeLoss:
 
         # Focal loss
         g = h['fl_gamma']  # focal loss gamma
+        e = h['pl_epsilon']
         if g > 0:
-            BCEcls, BCEobj = Pl(BCEcls, g), FocalLoss(BCEobj, g)
+            BCEcls, BCEobj = PloyLoss(BCEcls, g, epsilon=e), PloyLoss(BCEobj, g)
 
         m = de_parallel(model).model[-1]  # Detect() module
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  # P3-P7
