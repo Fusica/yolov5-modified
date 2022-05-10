@@ -140,6 +140,7 @@ class DConv(nn.Module):
     Dilation Convolution
     Didn't work as expected
     """
+
     def __init__(self, c1, c2, k=5, s=7, p=1, d=7, act=True):
         super().__init__()
         self.conv = nn.Conv2d(c1, c2, k, s, p, d)
@@ -360,13 +361,12 @@ class _NonLocalBlockND(nn.Module):
 
 
 class NONLocalBlock2D(_NonLocalBlockND):
-    def __init__(self, in_channels, out_channels, inter_channels=None, sub_sample=True, bn_layer=True):
+    def __init__(self, in_channels, out_channels, inter_channels=None, sub_sample=False, bn_layer=True):
         super(NONLocalBlock2D, self).__init__(in_channels,
                                               out_channels,
                                               inter_channels=inter_channels,
                                               dimension=2, sub_sample=sub_sample,
-                                              bn_layer=bn_layer,)
-
+                                              bn_layer=bn_layer, )
 
 # TODO add poolformer block into model
 # class Poolformer():
