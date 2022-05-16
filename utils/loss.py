@@ -138,7 +138,7 @@ class ComputeLoss:
         g = h['fl_gamma']  # focal loss gamma
         e = h['pl_epsilon']
         if g > 0:
-            BCEcls, BCEobj = PloyLoss(BCEcls, g, epsilon=e), PloyLoss(BCEobj, g)
+            BCEcls, BCEobj = PloyLoss(BCEcls, g, epsilon=e), PloyLoss(BCEobj, g, epsilon=e)
 
         m = de_parallel(model).model[-1]  # Detect() module
         self.balance = {3: [4.0, 1.0, 0.4]}.get(m.nl, [4.0, 1.0, 0.25, 0.06, 0.02])  # P3-P7
