@@ -11,19 +11,19 @@ import torch
 # a = torch.arange(3).reshape((3, 1))
 # b = torch.arange(4).reshape((1, 4))
 # print(a + b)
-from torch import nn
-
-
-class DSConv(nn.Module):
-    def __init__(self, c1, c2, k, s, p=0, d=1, act=True):
-        super(DSConv, self).__init__()
-        self.DConv = nn.Conv2d(c1, c1, k, s, p, d, c1)
-        self.PConv = nn.Conv2d(c1, c2, 1)
-        self.bn = nn.BatchNorm2d(c2)
-        self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
-
-    def forward(self, x):
-        return self.act(self.bn(self.PConv(self.DConv(x))))
+# from torch import nn
+#
+#
+# class DSConv(nn.Module):
+#     def __init__(self, c1, c2, k, s, p=0, d=1, act=True):
+#         super(DSConv, self).__init__()
+#         self.DConv = nn.Conv2d(c1, c1, k, s, p, d, c1)
+#         self.PConv = nn.Conv2d(c1, c2, 1)
+#         self.bn = nn.BatchNorm2d(c2)
+#         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
+#
+#     def forward(self, x):
+#         return self.act(self.bn(self.PConv(self.DConv(x))))
 
 
 # dsconv = DSConv(3, 64, 6, 2, 2)
@@ -104,3 +104,19 @@ class DSConv(nn.Module):
 # input = torch.randn((3, 3, 64400, 6))
 # output = acblock(input)
 # print(output.shape)
+from torch import nn
+from torchvision.ops import deform_conv2d
+
+input = torch.rand(4, 3, 10, 10)
+kh, kw = 4, 4
+weight = torch.rand(6, 3, kh, kw)
+# offset and mask should have the same spatial size as the output
+# of the convolution. In this case, for an input of 10, stride of 1
+# and kernel size of 3, without padding, the output size is 8
+offset = torch.rand(4, 2 * kh * kw, 7, 7)
+mask = torch.rand(4, kh * kw, 8, 8)
+# out = deform_conv2d(input, offset, weight, mask=None)
+
+test = nn.Conv2d(3, 64, 3, 1, 1)
+out = test(input)
+print(out.shape)
