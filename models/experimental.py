@@ -124,7 +124,7 @@ def attempt_load(weights, map_location=None, inplace=True, fuse=True):
 
 
 class DSConv(nn.Module):
-    def __init__(self, c1, c2, k, s, p, d=1, act=True):
+    def __init__(self, c1, c2, k=3, s=1, p=1, d=1, act=True):
         super(DSConv, self).__init__()
         self.DConv = nn.Conv2d(c1, c1, k, s, p, d, c1)
         self.PConv = nn.Conv2d(c1, c2, 1)
