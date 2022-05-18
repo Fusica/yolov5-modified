@@ -3,7 +3,10 @@
 Experimental modules
 """
 from models.common import Conv
+from models.common import C3
 from models.common import autopad
+from models.SwinTransformer import SwinTransformerBlock
+
 from utils.downloads import attempt_download
 
 import math
@@ -15,20 +18,6 @@ import numpy as np
 
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from torchvision.ops import deform_conv2d
-
-
-class CrossConv(nn.Module):
-    # Cross Convolution Downsample
-    def __init__(self, c1, c2, k=3, s=1, g=1, e=1.0, shortcut=False):
-        # ch_in, ch_out, kernel, stride, groups, expansion, shortcut
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, (1, k), (1, s))
-        self.cv2 = Conv(c_, c2, (k, 1), (s, 1), g=g)
-        self.add = shortcut and c1 == c2
-
-    def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
 
 class Sum(nn.Module):
@@ -751,7 +740,15 @@ class C3DF(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
-# test = DFConv(64, 64, 3, 1, 1)
-# input = torch.rand(2, 64, 20, 20)
+class C3STR(C3):
+    # C3 module with SwinTransformerBlock()
+    def __init__(self, c1, c2, n=3, shortcut=True, g=1, e=1):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = SwinTransformerBlock(c_, c_, c_//32, n)
+
+
+# test = C3STR(64, 64, 1)
+# input = torch.rand(2, 64, 7, 7)
 # output = test(input)
 # print(output.shape)
