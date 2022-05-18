@@ -17,6 +17,20 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from torchvision.ops import deform_conv2d
 
 
+class CrossConv(nn.Module):
+    # Cross Convolution Downsample
+    def __init__(self, c1, c2, k=3, s=1, g=1, e=1.0, shortcut=False):
+        # ch_in, ch_out, kernel, stride, groups, expansion, shortcut
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, (1, k), (1, s))
+        self.cv2 = Conv(c_, c2, (k, 1), (s, 1), g=g)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
 class Sum(nn.Module):
     # Weighted sum of 2 or more layers https://arxiv.org/abs/1911.09070
     def __init__(self, n, weight=False):  # n: number of inputs
@@ -173,7 +187,7 @@ class ECA(nn.Module):
         super(ECA, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
-        self.silu = nn.SiLU()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         # feature descriptor on the global spatial information
@@ -187,7 +201,7 @@ class ECA(nn.Module):
         y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
 
         # Multi-scale information fusion
-        y = self.silu(y)
+        y = self.relu(y)
 
         return x * y.expand_as(x)
 
@@ -518,13 +532,13 @@ class PF(nn.Module):
 #         return self.act(self.bn(x))
 
 class DFConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1, act=True, bias=False):
+    def __init__(self, c1, c2, kernel_size=3, stride=1, padding=1, act=True, bias=False):
         super(DFConv, self).__init__()
 
         self.stride = stride if type(stride) == tuple else (stride, stride)
         self.padding = padding
 
-        self.offset_conv = nn.Conv2d(in_channels,
+        self.offset_conv = nn.Conv2d(c1,
                                      2 * kernel_size * kernel_size,
                                      kernel_size=kernel_size,
                                      stride=stride,
@@ -534,7 +548,7 @@ class DFConv(nn.Module):
         nn.init.constant_(self.offset_conv.weight, 0.)
         nn.init.constant_(self.offset_conv.bias, 0.)
 
-        self.modulator_conv = nn.Conv2d(in_channels,
+        self.modulator_conv = nn.Conv2d(c1,
                                         kernel_size * kernel_size,
                                         kernel_size=kernel_size,
                                         stride=stride,
@@ -544,20 +558,20 @@ class DFConv(nn.Module):
         nn.init.constant_(self.modulator_conv.weight, 0.)
         nn.init.constant_(self.modulator_conv.bias, 0.)
 
-        self.regular_conv = nn.Conv2d(in_channels=in_channels,
-                                      out_channels=out_channels,
+        self.regular_conv = nn.Conv2d(c1,
+                                      c2,
                                       kernel_size=kernel_size,
                                       stride=stride,
                                       padding=self.padding,
                                       bias=bias)
-        self.bn = nn.BatchNorm2d(out_channels)
+        self.bn = nn.BatchNorm2d(c2)
         self.act = nn.SiLU() if act is True else (act if isinstance(act, nn.Module) else nn.Identity())
 
     def forward(self, x):
-        # h, w = x.shape[2:]
-        # max_offset = max(h, w)/4.
+        h, w = x.shape[2:]
+        max_offset = max(h, w)/4.
 
-        offset = self.offset_conv(x)    # .clamp(-max_offset, max_offset)
+        offset = self.offset_conv(x).clamp(-max_offset, max_offset)
         modulator = 2. * torch.relu(self.modulator_conv(x))
 
         # self.regular_conv.weight = self.regular_conv.weight.half() if x.dtype == torch.float16 else \
@@ -599,7 +613,7 @@ class C3DF(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
-test = C3DF(256, 256, 3)
-input = torch.rand(2, 256, 20, 20)
-output = test(input)
-print(output.shape)
+# test = DFConv(3, 64, 6, 2, 2)
+# input = torch.rand(2, 3, 640, 640)
+# output = test(input)
+# print(output.shape)
