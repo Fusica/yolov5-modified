@@ -6,6 +6,7 @@ from models.common import Conv
 from models.common import C3
 from models.common import autopad
 from models.SwinTransformer import SwinTransformerBlock
+from utils import torch_utils
 
 from utils.downloads import attempt_download
 
@@ -176,7 +177,7 @@ class ECA(nn.Module):
         super(ECA, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size - 1) // 2, bias=False)
-        self.relu = nn.ReLU()
+        self.silu = nn.SiLU()
 
     def forward(self, x):
         # feature descriptor on the global spatial information
@@ -190,7 +191,7 @@ class ECA(nn.Module):
         y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
 
         # Multi-scale information fusion
-        y = self.relu(y)
+        y = self.silu(y)
 
         return x * y.expand_as(x)
 
@@ -748,7 +749,11 @@ class C3STR(C3):
         self.m = SwinTransformerBlock(c_, c_, c_//32, n)
 
 
-# test = C3STR(64, 64, 1)
-# input = torch.rand(2, 64, 7, 7)
-# output = test(input)
-# print(output.shape)
+class Gap(nn.Module):
+    def __init__(self, c1, c2):
+        super(Gap, self).__init__()
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv2d(c1, c2, 1, 1)
+
+    def forward(self, x):
+        return self.conv(self.gap(x))
