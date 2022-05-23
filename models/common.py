@@ -726,3 +726,10 @@ class Classify(nn.Module):
     def forward(self, x):
         z = torch.cat([self.aap(y) for y in (x if isinstance(x, list) else [x])], 1)  # cat if list
         return self.flat(self.conv(z))  # flatten to x(b,c2)
+
+
+# test = nn.ConvTranspose2d(64, 64, 3, 2, 1, 1)
+#
+# input = torch.rand(1, 64, 40, 40)
+# output = test(input)
+# print(output.shape)
