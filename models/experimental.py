@@ -2,7 +2,7 @@
 """
 Experimental modules
 """
-from models.common import Conv, Bottleneck
+from models.common import Conv, Bottleneck, DWConv
 from models.common import C3
 from models.common import autopad
 from models.SwinTransformer import SwinTransformerBlock
@@ -807,9 +807,9 @@ class ChannelAttention(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.max_pool = nn.AdaptiveMaxPool2d(1)
 
-        self.fc1   = nn.Conv2d(in_planes, in_planes // 16, 1, bias=False)
+        self.fc1 = nn.Conv2d(in_planes, in_planes // 16, 1, bias=False)
         self.relu1 = nn.ReLU()
-        self.fc2   = nn.Conv2d(in_planes // 16, in_planes, 1, bias=False)
+        self.fc2 = nn.Conv2d(in_planes // 16, in_planes, 1, bias=False)
 
         self.sigmoid = nn.Sigmoid()
 
@@ -876,8 +876,9 @@ class ConvCBAM(nn.Module):
 
 class CBAMBottleneck(nn.Module):
     # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5,ratio=16,kernel_size=7):  # ch_in, ch_out, shortcut, groups, expansion
-        super(CBAMBottleneck,self).__init__()
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5, ratio=16,
+                 kernel_size=7):  # ch_in, ch_out, shortcut, groups, expansion
+        super(CBAMBottleneck, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
         self.cv2 = Conv(c_, c2, 3, 1, g=g)
@@ -1002,12 +1003,232 @@ class C3CA(C3):
         self.m = nn.Sequential(*(CABottleneck(c_, c_, shortcut) for _ in range(n)))
 
 
-# test = C3CA(128, 128, 3)
+class Upsample(nn.Module):
+    def __init__(self, c1, c2, n=1):
+        super(Upsample, self).__init__()
+        self.num = n
+        self.inchannel = c1
+        self.outchannel = c2
+        self.upsample = self.make_upsample()
+
+    def make_upsample(self):
+        inchannel, outchannel, layer = [], [], []
+        if self.num == 1:
+            inchannel = [self.inchannel]
+            outchannel = [self.outchannel]
+        elif self.num == 2:
+            inchannel = [self.inchannel, self.inchannel // 2]
+            outchannel = [self.inchannel // 2, self.outchannel]
+        elif self.num == 3:
+            inchannel = [self.inchannel, self.inchannel // 2, self.inchannel // 4]
+            outchannel = [self.inchannel // 2, self.inchannel // 4, self.outchannel]
+
+        for i in range(self.num):
+            layer.append(DSConv(inchannel[i], outchannel[i], 1, 1, 0))
+            layer.append(nn.Upsample(scale_factor=2.))
+            layer.append(nn.BatchNorm2d(outchannel[i]))
+            layer.append(nn.SiLU())
+        layer = nn.Sequential(*layer)
+        return layer
+
+    def forward(self, x):
+        return self.upsample(x)
+
+
+class Downsample(nn.Module):
+    def __init__(self, c1, c2, n=1):
+        super(Downsample, self).__init__()
+        self.num = n
+        self.inchannel = c1
+        self.outchannel = c2
+        assert c1 == c2, "c1 must equal to c2"
+        self.downsample = self.make_downsample()
+
+    def make_downsample(self):
+        inchannel, outchannel, layer = [], [], []
+        channel = self.inchannel
+        for i in range(self.num):
+            layer.append((DSConv(channel, channel, 3, 2, 1)))
+        layer = nn.Sequential(*layer)
+        return layer
+
+    def forward(self, x):
+        return self.downsample(x)
+
+
+class BottleneckDS(nn.Module):
+    # Standard bottleneck
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = DWConv(c1, c_, 1, 1)
+        self.cv2 = DSConv(c_, c2, 3, 1)
+        self.add = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+class C3DS(nn.Module):
+    # CSP Bottleneck with 3 convolutions
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = DWConv(c1, c_, 1, 1)
+        self.cv2 = DWConv(c1, c_, 1, 1)
+        self.cv3 = DWConv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.Sequential(*(BottleneckDS(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+
+
+class ASFFV5(nn.Module):
+    def __init__(self, level, multiplier=1, rfb=False, vis=False, act_cfg=True):
+        """
+        ASFF version for YoloV5 only.
+        Since YoloV5 outputs 3 layer of feature maps with different channels
+        which is different than YoloV3
+        normally, multiplier should be 1, 0.5
+        which means, the channel of ASFF can be
+        512, 256, 128 -> multiplier=1
+        256, 128, 64 -> multiplier=0.5
+        For even smaller, you gonna need change code manually.
+        """
+        super(ASFFV5, self).__init__()
+        self.level = level
+        self.dim = [int(1024 * multiplier), int(512 * multiplier),
+                    int(256 * multiplier)]
+        # print("dim:",self.dim)
+
+        self.inter_dim = self.dim[self.level]
+        if level == 0:
+            self.stride_level_1 = Conv(int(512 * multiplier), self.inter_dim, 3, 2)
+            # print(self.dim)
+            self.stride_level_2 = Conv(int(256 * multiplier), self.inter_dim, 3, 2)
+
+            self.expand = Conv(self.inter_dim, int(
+                1024 * multiplier), 3, 1)
+        elif level == 1:
+            self.compress_level_0 = Conv(
+                int(1024 * multiplier), self.inter_dim, 1, 1)
+            self.stride_level_2 = Conv(
+                int(256 * multiplier), self.inter_dim, 3, 2)
+            self.expand = Conv(self.inter_dim, int(512 * multiplier), 3, 1)
+        elif level == 2:
+            self.compress_level_0 = Conv(
+                int(1024 * multiplier), self.inter_dim, 1, 1)
+            self.compress_level_1 = Conv(
+                int(512 * multiplier), self.inter_dim, 1, 1)
+            self.expand = Conv(self.inter_dim, int(
+                256 * multiplier), 3, 1)
+
+        # when adding rfb, we use half number of channels to save memory
+        compress_c = 8 if rfb else 16
+
+        self.weight_level_0 = Conv(
+            self.inter_dim, compress_c, 1, 1)
+        self.weight_level_1 = Conv(
+            self.inter_dim, compress_c, 1, 1)
+        self.weight_level_2 = Conv(
+            self.inter_dim, compress_c, 1, 1)
+
+        self.weight_levels = Conv(
+            compress_c * 3, 3, 1, 1)
+        self.vis = vis
+
+    def forward(self, x):  # s,m,l
+        """
+        # 128, 256, 512
+        512, 256, 128
+        from small -> large
+        """
+        # print('x_level_0: ', x_level_0.shape)
+        # print('x_level_1: ', x_level_1.shape)
+        # print('x_level_2: ', x_level_2.shape)
+        x_level_0 = x[2]
+        x_level_1 = x[1]
+        x_level_2 = x[0]
+        if self.level == 0:
+            level_0_resized = x_level_0
+            level_1_resized = self.stride_level_1(x_level_1)
+
+            level_2_downsampled_inter = F.max_pool2d(
+                x_level_2, 3, stride=2, padding=1)
+
+            level_2_resized = self.stride_level_2(level_2_downsampled_inter)
+            # print('X——level_0: ', level_2_downsampled_inter.shape)
+        elif self.level == 1:
+            level_0_compressed = self.compress_level_0(x_level_0)
+            level_0_resized = F.interpolate(
+                level_0_compressed, scale_factor=2, mode='nearest')
+            level_1_resized = x_level_1
+            level_2_resized = self.stride_level_2(x_level_2)
+        elif self.level == 2:
+            level_0_compressed = self.compress_level_0(x_level_0)
+            level_0_resized = F.interpolate(
+                level_0_compressed, scale_factor=4, mode='nearest')
+            x_level_1_compressed = self.compress_level_1(x_level_1)
+            level_1_resized = F.interpolate(
+                x_level_1_compressed, scale_factor=2, mode='nearest')
+            level_2_resized = x_level_2
+
+        # print('level: {}, l1_resized: {}, l2_resized: {}'.format(self.level,
+        #  level_1_resized.shape, level_2_resized.shape))
+        level_0_weight_v = self.weight_level_0(level_0_resized)
+        level_1_weight_v = self.weight_level_1(level_1_resized)
+        level_2_weight_v = self.weight_level_2(level_2_resized)
+        # print('level_0_weight_v: ', level_0_weight_v.shape)
+        # print('level_1_weight_v: ', level_1_weight_v.shape)
+        # print('level_2_weight_v: ', level_2_weight_v.shape)
+
+        levels_weight_v = torch.cat(
+            (level_0_weight_v, level_1_weight_v, level_2_weight_v), 1)
+        levels_weight = self.weight_levels(levels_weight_v)
+        levels_weight = F.softmax(levels_weight, dim=1)
+
+        fused_out_reduced = level_0_resized * levels_weight[:, 0:1, :, :] + \
+                            level_1_resized * levels_weight[:, 1:2, :, :] + \
+                            level_2_resized * levels_weight[:, 2:, :, :]
+
+        out = self.expand(fused_out_reduced)
+
+        if self.vis:
+            return out, levels_weight, fused_out_reduced.sum(dim=1)
+        else:
+            return out
+
+
+class Concat_bifpn(nn.Module):  # pairwise add
+    # Concatenate a list of tensors along dimension
+    def __init__(self, c1, c2):
+        super(Concat_bifpn, self).__init__()
+        self.w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
+        self.w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
+        self.epsilon = 0.0001
+        self.conv = Conv(c1, c2, 1, 1, 0)
+        # self.act= nn.SiLU()  #这里原本用silu，但是用途应该是保证权重是0-1之间 所以改成relu
+        self.act = nn.ReLU()
+
+    def forward(self, x):  # mutil-layer 1-3 layers
+        # print("bifpn:",x.shape)
+        if len(x) == 2:
+            # w = self.relu(self.w1)
+            w = self.w1
+            weight = w / (torch.sum(w, dim=0) + self.epsilon)
+            x = self.conv(self.act(weight[0] * x[0] + weight[1] * x[1]))
+        elif len(x) == 3:
+            # w = self.relu(self.w2)
+            w = self.w2
+            weight = w / (torch.sum(w, dim=0) + self.epsilon)
+            x = self.conv(self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2]))
+        return x
+
+# test = Upsample(1024, 128, 2)
 #
-# input = torch.rand(1, 128, 40, 40)
+# input = torch.rand(1, 1024, 20, 20)
 # output = test(input)
 # print(output.shape)
-
 
 # test = nn.Conv3d(256, 512, (32, 1, 1), (32, 1, 1))
 #

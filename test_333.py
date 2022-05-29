@@ -3,10 +3,17 @@
 import torch
 from torch import nn
 
-w = torch.zeros(3, 5)
-print(w)
+from utils.aws.resume import f
 
-nn.init.uniform_(w)
-print(w)
+# w = torch.zeros(3, 5)
+# print(w)
+#
+# nn.init.uniform_(w)
+# print(w)
 
+# for i in range(3):
+#     print(i)
 
+x = torch.rand(3, 3, 2)
+x = x.view(2, 9)
+print(x)
