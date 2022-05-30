@@ -11,6 +11,7 @@ import yaml
 from tqdm import tqdm
 
 from utils.general import LOGGER, colorstr, emojis
+from utils.yolo_kmeans import k_means, wh_iou
 
 PREFIX = colorstr('AutoAnchor: ')
 
@@ -50,7 +51,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
         LOGGER.info(emojis(f'{s}Anchors are a poor fit to dataset ⚠️, attempting to improve...'))
         na = m.anchors.numel() // 2  # number of anchors
         try:
-            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False)
+            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=50000, verbose=False)
         except Exception as e:
             LOGGER.info(f'{PREFIX}ERROR: {e}')
         new_bpr = metric(anchors)[0]
@@ -132,7 +133,7 @@ def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen
         LOGGER.info(f'{PREFIX}Running kmeans for {n} anchors on {len(wh)} points...')
         assert n <= len(wh)  # apply overdetermined constraint
         s = wh.std(0)  # sigmas for whitening
-        k = kmeans(wh / s, n, iter=30)[0] * s  # points
+        k = kmeans(wh / s, n, iter=100)[0] * s  # points
         assert n == len(k)  # kmeans may return fewer points than requested if wh is insufficient or too similar
     except Exception:
         LOGGER.warning(f'{PREFIX}WARNING: switching strategies from kmeans to random init')

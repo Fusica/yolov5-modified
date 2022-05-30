@@ -7,6 +7,7 @@ from models.common import C3
 from models.common import autopad
 from models.SwinTransformer import SwinTransformerBlock
 from utils import torch_utils
+from utils.activations import AconC
 
 from utils.downloads import attempt_download
 
@@ -1028,8 +1029,7 @@ class Upsample(nn.Module):
             layer.append(nn.Upsample(scale_factor=2.))
             layer.append(nn.BatchNorm2d(outchannel[i]))
             layer.append(nn.SiLU())
-        layer = nn.Sequential(*layer)
-        return layer
+        return nn.Sequential(*layer)
 
     def forward(self, x):
         return self.upsample(x)
@@ -1041,16 +1041,23 @@ class Downsample(nn.Module):
         self.num = n
         self.inchannel = c1
         self.outchannel = c2
-        assert c1 == c2, "c1 must equal to c2"
         self.downsample = self.make_downsample()
 
     def make_downsample(self):
         inchannel, outchannel, layer = [], [], []
-        channel = self.inchannel
+        if self.num == 1:
+            inchannel = [self.inchannel]
+            outchannel = [self.outchannel]
+        elif self.num == 2:
+            inchannel = [self.inchannel, self.inchannel * 2]
+            outchannel = [self.inchannel * 2, self.outchannel]
+        elif self.num == 3:
+            inchannel = [self.inchannel, self.inchannel * 2, self.inchannel * 4]
+            outchannel = [self.inchannel * 2, self.inchannel * 4, self.outchannel]
         for i in range(self.num):
-            layer.append((DSConv(channel, channel, 3, 2, 1)))
-        layer = nn.Sequential(*layer)
-        return layer
+            layer.append(Conv(inchannel[i], outchannel[i], 1, 1, 0))
+            layer.append(DWConv(outchannel[i], outchannel[i], 3, 2, 1))
+        return nn.Sequential(*layer)
 
     def forward(self, x):
         return self.downsample(x)
@@ -1199,15 +1206,14 @@ class ASFFV5(nn.Module):
             return out
 
 
-class Concat_bifpn(nn.Module):  # pairwise add
+class Add_Bi(nn.Module):  # pairwise add
     # Concatenate a list of tensors along dimension
-    def __init__(self, c1, c2):
-        super(Concat_bifpn, self).__init__()
+    def __init__(self, n=2):
+        super(Add_Bi, self).__init__()
         self.w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
         self.w3 = nn.Parameter(torch.ones(4, dtype=torch.float32), requires_grad=True)
         self.epsilon = 0.0001
-        self.conv = Conv(c1, c2, 1, 1, 0)
         # self.act= nn.SiLU()  #这里原本用silu，但是用途应该是保证权重是0-1之间 所以改成relu
         self.act = nn.ReLU()
 
@@ -1217,30 +1223,42 @@ class Concat_bifpn(nn.Module):  # pairwise add
             # w = self.relu(self.w1)
             w = self.w1
             weight = w / (torch.sum(w, dim=0) + self.epsilon)
-            x = self.conv(self.act(weight[0] * x[0] + weight[1] * x[1]))
+            x = self.act(weight[0] * x[0] + weight[1] * x[1])
         elif len(x) == 3:
             # w = self.relu(self.w2)
             w = self.w2
             weight = w / (torch.sum(w, dim=0) + self.epsilon)
-            x = self.conv(self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2]))
-        elif len(x) == 3:
+            x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2])
+        elif len(x) == 4:
             w = self.w3
             weight = w / (torch.sum(w, dim=0) + self.epsilon)
-            x = self.conv(self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3]))
+            x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3])
         return x
 
 
 class Add_weight(nn.Module):
     def __init__(self, n=2):
         super(Add_weight, self).__init__()
+        self.num = n
 
     def forward(self, x):
-        return torch.add(x[0], x[1])
+        if self.num == 2:
+            return x[0] + x[1]
+        elif self.num == 3:
+            return x[0] + x[1] + x[2]
+        elif self.num == 4:
+            return x[0] + x[1] + x[2] + x[3]
 
 
-# test = Upsample(1024, 128, 2)
+class ConvACON(Conv):
+    def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
+        super(ConvACON, self).__init__(c1, c2, k, s, p, g, act)
+        self.act = AconC(c2)
+
+
+# test = ConvACON(128, 256, 3, 2, 1)
 #
-# input = torch.rand(1, 1024, 20, 20)
+# input = torch.rand(1, 128, 160, 160)
 # output = test(input)
 # print(output.shape)
 
@@ -1250,9 +1268,10 @@ class Add_weight(nn.Module):
 # output = test(input)
 # print(output.shape)
 
-# test = Add_weight()
+
+# test = Add_weight(4)
 #
-# input1 = [torch.rand(1, 64, 20, 20), torch.rand(1, 64, 1, 1)]
+# input1 = [torch.rand(1, 64, 20, 20), torch.rand(1, 64, 1, 1), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20)]
 #
 # output1 = test(input1)
 # print(output1.shape)
