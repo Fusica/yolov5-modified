@@ -22,5 +22,14 @@ from torch import nn
 #     print(i, j)
 
 
+# test = nn.Linear(96, 3*96)
+#
+# input = torch.rand(1, 400, 96)
+#
+# qkv = test(input).reshape(1, -1, 3, 96).permute(2, 0, 1, 3)
+#
+# print(qkv[2].shape)
 
-
+x = torch.rand(1, 128, 160, 160)
+x = torch.chunk(x, 4, dim=1)
+print(x[1].shape)

@@ -5,6 +5,7 @@ Experimental modules
 
 from models.common import Conv, Bottleneck, C3, DWConv, autopad
 from models.SwinTransformer import SwinTransformerBlock
+from models.cswin import CSWinTransformer
 from utils import torch_utils
 from utils.activations import AconC
 
@@ -1035,8 +1036,47 @@ class C3Involution(C3):
         self.m = nn.Sequential(*(BottleneckInvolution(c_, c_) for _ in range(n)))
 
 
-# test = C3Involution(512, 512, 9)
-# input = torch.rand(1, 512, 40, 40)
+class CSWinBlock(CSWinTransformer):
+    """
+    default:
+    img_size=[160, 80, 40, 20], embed_dim=[96, 144, 192, 240], split_size=[8, 16, 20, 20], depth=[2, 2, 6, 2]
+    """
+
+    def __init__(self, c1, c2, stage, embed_dim, split_size, depth):
+        super(CSWinBlock, self).__init__(c1, c2, stage, embed_dim, split_size, depth)
+
+
+class ADiCBlock(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(ADiCBlock, self).__init__()
+        assert c1 == c2, "c1 and c2 must be equal"
+        self.shortcut = shortcut
+        c_ = int(c1 // 4)
+        c__ = int(c1 // 8)
+        self.deformable = nn.Sequential(
+            Conv(c_, c__, 1, 1, 0),
+            DFConv(c__, c__),
+            Conv(c__, c_, 1, 1, 0)
+        )
+        self.involution = BottleneckInvolution(c_, c_)
+        self.coordatt = CoordAtt(c_, c_)
+        self.hr = HRStage(c_, c_)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = AconC(c2)
+
+    def forward(self, x):
+        residual = x
+        x = torch.chunk(x, 4, dim=1)
+        df_output = self.deformable(x[0])
+        iv_output = self.involution(x[1])
+        ca_output = self.coordatt(x[2])
+        hr_output = self.hr(x[3])
+
+        return residual + self.act(self.bn(torch.cat((df_output, iv_output, ca_output, hr_output), dim=1)))
+
+
+# test = ADiCBlock(128, 128)
+# input = torch.rand(1, 128, 160, 160)
 #
 # startTime = time.time()
 # output = test(input)
