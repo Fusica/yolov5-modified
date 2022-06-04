@@ -31,5 +31,17 @@ from torch import nn
 # print(qkv[2].shape)
 
 x = torch.rand(1, 128, 160, 160)
-x = torch.chunk(x, 4, dim=1)
-print(x[1].shape)
+# x = torch.chunk(x, 4, dim=1)
+# print(x[1].shape)
+
+# x = x.flatten(2).unsqueeze(0).transpose(0, 3).squeeze(3).unsqueeze(3).transpose(0, 3).reshape(1, 128, 160, 160)
+# print(x.shape)
+
+q = torch.rand(1, 128, 40, 20)
+k = torch.rand(1, 128, 40, 20)
+v = torch.rand(1, 128, 40, 20)
+
+content = torch.matmul(q.permute(0, 1, 3, 2), k)
+c1, c2, c3, c4 = content.size()
+
+print(c3)

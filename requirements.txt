@@ -40,3 +40,4 @@ thop  # FLOPs computation
 # roboflow
 thop  # FLOPs computation
 timm~=0.5.4
+einops

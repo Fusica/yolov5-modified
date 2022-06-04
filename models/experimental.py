@@ -2,7 +2,7 @@
 """
 Experimental modules
 """
-
+from models.coat import SerialBlock
 from models.common import Conv, Bottleneck, C3, DWConv, autopad
 from models.SwinTransformer import SwinTransformerBlock
 from models.cswin import CSWinTransformer
@@ -131,6 +131,15 @@ class DSConv(nn.Module):
 class DSConv_A(DSConv):
     def __init__(self, c1, c2, k=3, s=1, p=1, d=1, act=True):
         super(DSConv_A, self).__init__(c1, c2, k, s, p, d, act)
+        if act:
+            self.act = AconC(c2)
+        else:
+            self.act = nn.Identity()
+
+
+class DWConv_A(DWConv):
+    def __init__(self, c1, c2, k=3, s=1, act=True):
+        super(DWConv_A, self).__init__(c1, c2, k, s, act)
         if act:
             self.act = AconC(c2)
         else:
@@ -961,8 +970,8 @@ class HRBlock(nn.Module):
         super(HRBlock, self).__init__()
         assert c1 == c2, "must match channels"
         self.extract = nn.Sequential(
-            DSConv_A(c1, c2, 3, 1, 1, act=False),
-            DSConv_A(c2, c2, 3, 1, 1)
+            DWConv_A(c1, c2, 3, 1, act=False),
+            DWConv_A(c2, c2, 3, 1)
         )
         self.residual = shortcut and c1 == c2
 
@@ -993,12 +1002,13 @@ class Involution(nn.Module):
         reduction_ratio = 4
         self.group_channels = 16
         self.groups = self.channels // self.group_channels
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(c1, c1 // reduction_ratio, 1, 1, 0),
-            nn.BatchNorm2d(c1 // reduction_ratio),
-            nn.ReLU()
-        )
-        self.conv2 = nn.Conv2d(c1 // reduction_ratio, kernel_size ** 2 * self.groups, 1)
+        self.conv1 = DWConv_A(c1, c1 // reduction_ratio, 1, 1)
+        # nn.Sequential(
+        #     nn.Conv2d(c1, c1 // reduction_ratio, 1, 1, 0),
+        #     nn.BatchNorm2d(c1 // reduction_ratio),
+        #     nn.ReLU()
+        # )
+        self.conv2 = DWConv_A(c1 // reduction_ratio, kernel_size ** 2 * self.groups, 1, 1, False)
         if stride > 1:
             self.avgpool = nn.AvgPool2d(stride, stride)
         self.unfold = nn.Unfold(kernel_size, 1, (kernel_size - 1) // 2, stride)
@@ -1016,13 +1026,13 @@ class BottleneckInvolution(nn.Module):
     def __init__(self, c1, c2, shortcut=True, e=4.0):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv1 = ConvACON(c1, c_, 1, 1)
         self.cv2 = nn.Sequential(
             Involution(c_, c_, 7, 1),
             nn.BatchNorm2d(c_),
             nn.SiLU()
         )
-        self.cv3 = Conv(c_, c2, 1, 1, act=False)
+        self.cv3 = ConvACON(c_, c2, 1, 1, act=False)
         self.add = shortcut and c1 == c2
 
     def forward(self, x):
@@ -1046,36 +1056,54 @@ class CSWinBlock(CSWinTransformer):
         super(CSWinBlock, self).__init__(c1, c2, stage, embed_dim, split_size, depth)
 
 
-class ADiCBlock(nn.Module):
-    def __init__(self, c1, c2, shortcut=True):
-        super(ADiCBlock, self).__init__()
+class DiBlock(nn.Module):
+    def __init__(self, c1, c2, n, shortcut=True):
+        super(DiBlock, self).__init__()
         assert c1 == c2, "c1 and c2 must be equal"
         self.shortcut = shortcut
-        c_ = int(c1 // 4)
-        c__ = int(c1 // 8)
-        self.deformable = nn.Sequential(
-            Conv(c_, c__, 1, 1, 0),
-            DFConv(c__, c__),
-            Conv(c__, c_, 1, 1, 0)
-        )
-        self.involution = BottleneckInvolution(c_, c_)
-        self.coordatt = CoordAtt(c_, c_)
-        self.hr = HRStage(c_, c_)
+        c_ = int(c1 // 2)
+        self.deformable = DFConv(c_, c_)
+        self.involution = C3Involution(c_, c_, n)
+        self.conv = DWConv_A(c1, c2, 3, 1)
         self.bn = nn.BatchNorm2d(c2)
         self.act = AconC(c2)
 
     def forward(self, x):
         residual = x
-        x = torch.chunk(x, 4, dim=1)
+        x = torch.chunk(x, 2, dim=1)
         df_output = self.deformable(x[0])
         iv_output = self.involution(x[1])
-        ca_output = self.coordatt(x[2])
-        hr_output = self.hr(x[3])
+        cv_output = self.conv(residual)
 
-        return residual + self.act(self.bn(torch.cat((df_output, iv_output, ca_output, hr_output), dim=1)))
+        return self.act(self.bn(torch.cat((df_output, iv_output), dim=1) + cv_output))
 
 
-# test = ADiCBlock(128, 128)
+class CoaTBlock(nn.Module):
+    def __init__(self, c1, c2, num_layers):
+        super(CoaTBlock, self).__init__()
+        self.conv = None
+        if c1 != c2:
+            self.conv = Conv(c1, c2)
+        self.tr = nn.Sequential(*(SerialBlock(c2, 8) for _ in range(num_layers)))
+        self.c2 = c2
+
+    def forward(self, x):
+        if self.conv is not None:
+            x = self.conv(x)
+        b, _, w, h = x.shape
+        p = x.flatten(2).permute(0, 2, 1)
+        return self.tr(p).permute(0, 2, 1).reshape(b, self.c2, w, h)
+
+
+class C3CoaT(C3):
+    # C3 module with TransformerBlock()
+    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = CoaTBlock(c_, c_, n)
+
+
+# test = C3CoaT(128, 128, 4)
 # input = torch.rand(1, 128, 160, 160)
 #
 # startTime = time.time()
