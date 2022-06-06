@@ -182,7 +182,6 @@ class SerialBlock(nn.Module):
 
     def forward(self, x):
         N = x.shape[1]
-        global size
         size = (int(math.sqrt(N)), int(math.sqrt(N)))
         # Conv-Attention.
         x = self.cpe(x, size)
@@ -198,10 +197,9 @@ class SerialBlock(nn.Module):
         return x
 
 
-# test = SerialBlock(1024, 8)
+# test = SerialBlock(512, 8)
 #
-# x = torch.rand(1, 400, 1024)
-# size = (20, 20)
+# x = torch.rand(1, 1600, 512)
 #
 # output = test(x)
 #
