@@ -843,6 +843,7 @@ class C3CA(C3):
 class Upsample(nn.Module):
     def __init__(self, c1, c2, n=1):
         super(Upsample, self).__init__()
+        assert c1 > c2, "c1 must larger than c2"
         self.num = n
         self.inchannel = c1
         self.outchannel = c2
@@ -859,6 +860,9 @@ class Upsample(nn.Module):
         elif self.num == 3:
             inchannel = [self.inchannel, self.inchannel // 2, self.inchannel // 4]
             outchannel = [self.inchannel // 2, self.inchannel // 4, self.outchannel]
+        elif self.num == 4:
+            inchannel = [self.inchannel, self.inchannel // 2, self.inchannel // 4, self.inchannel // 8]
+            outchannel = [self.inchannel // 2, self.inchannel // 4, self.inchannel // 8, self.outchannel]
 
         for i in range(self.num):
             layer.append(nn.Upsample(scale_factor=2.))
@@ -874,6 +878,7 @@ class Upsample(nn.Module):
 class Downsample(nn.Module):
     def __init__(self, c1, c2, n=1):
         super(Downsample, self).__init__()
+        assert c1 < c2, "c1 must smaller than c2"
         self.num = n
         self.inchannel = c1
         self.outchannel = c2
@@ -890,8 +895,12 @@ class Downsample(nn.Module):
         elif self.num == 3:
             inchannel = [self.inchannel, self.inchannel * 2, self.inchannel * 4]
             outchannel = [self.inchannel * 2, self.inchannel * 4, self.outchannel]
+        elif self.num == 4:
+            inchannel = [self.inchannel, self.inchannel * 2, self.inchannel * 4, self.inchannel * 8]
+            outchannel = [self.inchannel * 2, self.inchannel * 4, self.inchannel * 8, self.outchannel]
+
         for i in range(self.num):
-            layer.append(DSConv(inchannel[i], outchannel[i], 3, 2, 1))
+            layer.append(DSConv_A(inchannel[i], outchannel[i], 3, 2, 1))
         return nn.Sequential(*layer)
 
     def forward(self, x):
@@ -922,6 +931,7 @@ class Add_Bi(nn.Module):  # pairwise add
         self.w1 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.w2 = nn.Parameter(torch.ones(3, dtype=torch.float32), requires_grad=True)
         self.w3 = nn.Parameter(torch.ones(4, dtype=torch.float32), requires_grad=True)
+        self.w4 = nn.Parameter(torch.ones(5, dtype=torch.float32), requires_grad=True)
         self.epsilon = 0.0001
         # self.act= nn.SiLU()  #这里原本用silu，但是用途应该是保证权重是0-1之间 所以改成relu
         self.act = nn.ReLU()
@@ -942,6 +952,10 @@ class Add_Bi(nn.Module):  # pairwise add
             w = self.w3
             weight = w / (torch.sum(w, dim=0) + self.epsilon)
             x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3])
+        elif len(x) == 5:
+            w = self.w4
+            weight = w / (torch.sum(w, dim=0) + self.epsilon)
+            x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3] + weight[3] * x[3])
         return x
 
 
@@ -962,7 +976,10 @@ class Add_weight(nn.Module):
 class ConvACON(Conv):
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, act=True):
         super(ConvACON, self).__init__(c1, c2, k, s, p, g, act)
-        self.act = AconC(c2)
+        if act:
+            self.act = AconC(c2)
+        else:
+            self.act = nn.Identity()
 
 
 class HRBlock(nn.Module):
@@ -1002,13 +1019,13 @@ class Involution(nn.Module):
         reduction_ratio = 4
         self.group_channels = 16
         self.groups = self.channels // self.group_channels
-        self.conv1 = DWConv_A(c1, c1 // reduction_ratio, 1, 1)
+        self.conv1 = ConvACON(c1, c1 // reduction_ratio, 1, 1)
         # nn.Sequential(
         #     nn.Conv2d(c1, c1 // reduction_ratio, 1, 1, 0),
         #     nn.BatchNorm2d(c1 // reduction_ratio),
         #     nn.ReLU()
         # )
-        self.conv2 = DWConv_A(c1 // reduction_ratio, kernel_size ** 2 * self.groups, 1, 1, False)
+        self.conv2 = ConvACON(c1 // reduction_ratio, kernel_size ** 2 * self.groups, 1, 1, act=False)
         if stride > 1:
             self.avgpool = nn.AvgPool2d(stride, stride)
         self.unfold = nn.Unfold(kernel_size, 1, (kernel_size - 1) // 2, stride)
@@ -1078,6 +1095,64 @@ class DiBlock(nn.Module):
         return self.act(self.bn(torch.cat((df_output, iv_output), dim=1) + cv_output))
 
 
+class CTGBlock(nn.Module):
+    """
+    Inspired by iFormer, use two main path to extract features, Involution, Maxpool, CoaT
+    """
+
+    def __init__(self, c1, c2, n, shortcut=True):
+        super(CTGBlock, self).__init__()
+        assert c1 == c2, "c1 and c2 must be equal"
+        self.shortcut = shortcut
+        c_h, c_l = None, None
+        if n == 1:
+            # 160*160 [3/8, 3/8, 1/4]
+            c_h = int(c1 // 8 * 3)
+            c_l = int(c1 // 1/4)
+        elif n == 2:
+            # 80*80 [1/4, 1/4, 2/4]
+            c_h = int(c1 // 4)
+            c_l = int(c1 // 2)
+        elif n == 3:
+            # 40*40 [1/8, 1/8, 3/4]
+            c_h = int(c1 // 8)
+            c_l = int(c1 // 4 * 3)
+        self.involution = BottleneckInvolution(c_h, c_h)
+        self.maxpool = nn.MaxPool2d(3, 1, 1)
+        self.conv = ConvACON(c_h, c_h, 3, 1, 1)
+        self.coat = CoaTBlock(c_l, c_l, 2)
+        self.coordatt = CoordAtt(c1, c2)
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.bn = nn.BatchNorm2d(c2)
+        self.act = AconC(c2)
+        self.n = n
+
+    def forward(self, x):
+        residual = x
+        if self.n == 1:
+            x_h = int(x.shape[1] // 8 * 3)
+            x_l = int(x.shape[1] // 4)
+            x = torch.split(x, [x_h, x_h, x_l], dim=1)
+        elif self.n == 2:
+            x_h = int(x.shape[1] // 4)
+            x_l = int(x.shape[1] // 2)
+            x = torch.split(x, [x_h, x_h, x_l], dim=1)
+        elif self.n == 3:
+            x_h = int(x.shape[1] // 8)
+            x_l = int(x.shape[1] // 4 * 3)
+            x = torch.split(x, [x_h, x_h, x_l], dim=1)
+        else:
+            assert "only operate on first 3 maps"
+        x_h1, x_h2 = x[0], x[1]  # x_h[0], x_h[1]: maxpool and involution
+        x_l = x[2]
+        output_h1 = self.conv(self.maxpool(x_h1))
+        output_h2 = self.involution(x_h2)
+        output_l = self.coat(x_l)
+        output_add = self.coordatt(self.gap(residual))
+
+        return residual + self.act(self.bn(output_add + torch.cat((output_h1, output_h2, output_l), dim=1)))
+
+
 class CoaTBlock(nn.Module):
     def __init__(self, c1, c2, num_layers):
         super(CoaTBlock, self).__init__()
@@ -1103,8 +1178,8 @@ class C3CoaT(C3):
         self.m = CoaTBlock(c_, c_, n)
 
 
-# test = C3CoaT(128, 128, 4)
-# input = torch.rand(1, 128, 160, 160)
+# test = Downsample(512, 2048, 2)
+# input = torch.rand(1, 512, 40, 40)
 #
 # startTime = time.time()
 # output = test(input)
@@ -1112,16 +1187,20 @@ class C3CoaT(C3):
 # print(endTime - startTime)
 # print(output.shape)
 
-# test = DSConv_A(128, 128, 3, 1, 1, act=False)
+
+# test = ADiCBlock(512, 512, 3)
 #
-# input = torch.rand(1, 128, 20, 20)
+# input = torch.rand(1, 512, 40, 40)
+# start = time.time()
 # output = test(input)
+# end = time.time()
 # print(output.shape)
+# print(end-start)
 
 
-# test = Add_weight(4)
+# test = Add_Bi(5)
 #
-# input1 = [torch.rand(1, 64, 20, 20), torch.rand(1, 64, 1, 1), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20)]
+# input1 = [torch.rand(1, 64, 20, 20), torch.rand(1, 64, 1, 1), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20)]
 #
 # output1 = test(input1)
 # print(output1.shape)

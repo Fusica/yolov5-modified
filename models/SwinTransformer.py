@@ -20,6 +20,7 @@ def window_partition(x, window_size: int):
     windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
     return windows
 
+
 def window_reverse(windows, window_size: int, H: int, W: int):
     """
     将一个个window还原成一个feature map
@@ -61,12 +62,14 @@ def drop_path_f(x, drop_prob: float = 0., training: bool = False):
 class DropPath(nn.Module):
     """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
     """
+
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
         self.drop_prob = drop_prob
 
     def forward(self, x):
         return drop_path_f(x, self.drop_prob, self.training)
+
 
 class WindowAttention(nn.Module):
     r""" Window based multi-head self attention (W-MSA) module with relative position bias.
@@ -115,7 +118,7 @@ class WindowAttention(nn.Module):
         nn.init.trunc_normal_(self.relative_position_bias_table, std=.02)
         self.softmax = nn.Softmax(dim=-1)
 
-    def forward(self, x, mask= None):
+    def forward(self, x, mask=None):
         """
         Args:
             x: input features with shape of (num_windows*B, Mh*Mw, C)
@@ -162,9 +165,11 @@ class WindowAttention(nn.Module):
         x = self.proj_drop(x)
         return x
 
+
 class Mlp(nn.Module):
     """ MLP as used in Vision Transformer, MLP-Mixer and related networks
     """
+
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
         super().__init__()
         out_features = out_features or in_features
@@ -183,6 +188,7 @@ class Mlp(nn.Module):
         x = self.fc2(x)
         x = self.drop2(x)
         return x
+
 
 class SwinTransformerLayer(nn.Module):
     # Vision Transformer https://arxiv.org/abs/2010.11929
@@ -296,6 +302,3 @@ class SwinTransformerBlock(nn.Module):
             x = self.conv(x)
         x = self.tr(x)
         return x
-
-
-
