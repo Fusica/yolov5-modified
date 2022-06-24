@@ -1178,8 +1178,47 @@ class C3CoaT(C3):
         self.m = CoaTBlock(c_, c_, n)
 
 
-# test = Downsample(512, 2048, 2)
-# input = torch.rand(1, 512, 40, 40)
+class LKA(nn.Module):
+    def __init__(self, c1):
+        super().__init__()
+        self.conv0 = nn.Conv2d(c1, c1, 5, padding=2, groups=c1)
+        self.conv_spatial = nn.Conv2d(c1, c1, 7, stride=1, padding=9, groups=c1, dilation=3)
+        self.conv1 = nn.Conv2d(c1, c1, 1)
+
+    def forward(self, x):
+        u = x.clone()
+        attn = self.conv0(x)
+        attn = self.conv_spatial(attn)
+        attn = self.conv1(attn)
+
+        return u * attn
+
+
+class LKA_CABlock(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(LKA_CABlock, self).__init__()
+        assert c1 == c2, "mustn't change channels"
+        c_ = int(c1 // 2)
+        c__ = int(c_ * 2)
+        self.conv1 = nn.Conv2d(c_, c__, 1)
+        self.lka = LKA(c__)
+        self.conv2 = nn.Conv2d(c__, c_, 3, 1, 1)
+        self.ca = CoordAtt(c_, c_)
+        self.shortcut = shortcut
+
+    def forward(self, x):
+        residual = x
+        x = torch.chunk(x, 2, 1)
+        output_1 = self.conv2(self.lka(self.conv1(x[0])))
+        output_2 = self.ca(x[1])
+        if self.shortcut:
+            return residual + torch.cat((output_1, output_2), dim=1)
+        else:
+            return torch.cat((output_1, output_2), dim=1)
+
+
+# test = LKA_CABlock(256, 256)
+# input = torch.rand(1, 256, 80, 80)
 #
 # startTime = time.time()
 # output = test(input)
