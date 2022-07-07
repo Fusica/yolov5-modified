@@ -868,7 +868,7 @@ class Upsample(nn.Module):
             layer.append(nn.Upsample(scale_factor=2.))
             layer.append(nn.BatchNorm2d(inchannel[i]))
             layer.append(nn.SiLU())
-            layer.append(Conv(inchannel[i], outchannel[i], 1, 1, 0))
+            layer.append(nn.Conv2d(inchannel[i], outchannel[i], 1, 1, 0))
         return nn.Sequential(*layer)
 
     def forward(self, x):
@@ -900,7 +900,7 @@ class Downsample(nn.Module):
             outchannel = [self.inchannel * 2, self.inchannel * 4, self.inchannel * 8, self.outchannel]
 
         for i in range(self.num):
-            layer.append(DSConv_A(inchannel[i], outchannel[i], 3, 2, 1))
+            layer.append(DWConv(inchannel[i], outchannel[i], 3, 2, 1))
         return nn.Sequential(*layer)
 
     def forward(self, x):
@@ -1108,7 +1108,7 @@ class CTGBlock(nn.Module):
         if n == 1:
             # 160*160 [3/8, 3/8, 1/4]
             c_h = int(c1 // 8 * 3)
-            c_l = int(c1 // 1/4)
+            c_l = int(c1 // 1 / 4)
         elif n == 2:
             # 80*80 [1/4, 1/4, 2/4]
             c_h = int(c1 // 4)
@@ -1182,7 +1182,10 @@ class LKA(nn.Module):
     def __init__(self, c1):
         super().__init__()
         self.conv0 = nn.Conv2d(c1, c1, 5, padding=2, groups=c1)
+        # padding is too big
+        self.conv_spatial1 = nn.Conv2d(c1, c1, 5, stride=1, padding=8, groups=c1, dilation=4)
         self.conv_spatial = nn.Conv2d(c1, c1, 7, stride=1, padding=9, groups=c1, dilation=3)
+        self.conv_spatial3 = nn.Conv2d(c1, c1, 9, stride=1, padding=9, groups=c1, dilation=3)
         self.conv1 = nn.Conv2d(c1, c1, 1)
 
     def forward(self, x):
@@ -1217,8 +1220,52 @@ class LKA_CABlock(nn.Module):
             return torch.cat((output_1, output_2), dim=1)
 
 
-# test = LKA_CABlock(256, 256)
-# input = torch.rand(1, 256, 80, 80)
+class selayer(nn.Module):
+    def __init__(self, c1, c2, ratio=16) -> None:
+        super(selayer, self).__init__()
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.l1 = nn.Linear(c1, c1 // ratio, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.l2 = nn.Linear(c1 // ratio, c1, bias=False)
+        self.sig = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, _, _, = x.size()
+        y = self.avgpool(x).view(b, c)
+        y = self.l1(y)
+        y = self.relu(y)
+        y = self.l2(y)
+        y = self.sig(y)
+        y = y.view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
+class HRBlock_SE(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(HRBlock_SE, self).__init__()
+        assert c1 == c2, "must match channels"
+        self.extract = nn.Sequential(
+            DWConv_A(c1, c2, 3, 1, act=False),
+            selayer(c2, c2),
+            DWConv_A(c2, c2, 3, 1)
+        )
+        self.residual = shortcut and c1 == c2
+
+    def forward(self, x):
+        return x + self.extract(x) if self.residual else self.extract(x)
+
+
+class HRStage_SE(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(HRStage_SE, self).__init__()
+        self.m = nn.Sequential(*(HRBlock(c1, c2, shortcut) for _ in range(4)))
+
+    def forward(self, x):
+        return self.m(x)
+
+
+# test = HRStage_SE(128, 128)
+# input = torch.rand(1, 128, 160, 160)
 #
 # startTime = time.time()
 # output = test(input)
