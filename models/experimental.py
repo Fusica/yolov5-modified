@@ -900,7 +900,7 @@ class Downsample(nn.Module):
             outchannel = [self.inchannel * 2, self.inchannel * 4, self.inchannel * 8, self.outchannel]
 
         for i in range(self.num):
-            layer.append(DWConv(inchannel[i], outchannel[i], 3, 2, 1))
+            layer.append(DSConv(inchannel[i], outchannel[i], 3, 2, 1))
         return nn.Sequential(*layer)
 
     def forward(self, x):
@@ -987,8 +987,8 @@ class HRBlock(nn.Module):
         super(HRBlock, self).__init__()
         assert c1 == c2, "must match channels"
         self.extract = nn.Sequential(
-            DWConv_A(c1, c2, 3, 1, act=False),
-            DWConv_A(c2, c2, 3, 1)
+            Conv(c1, c2, 3, 1, act=False),
+            Conv(c2, c2, 3, 1)
         )
         self.residual = shortcut and c1 == c2
 
@@ -1245,9 +1245,9 @@ class HRBlock_SE(nn.Module):
         super(HRBlock_SE, self).__init__()
         assert c1 == c2, "must match channels"
         self.extract = nn.Sequential(
-            DWConv_A(c1, c2, 3, 1, act=False),
+            DSConv(c1, c2, 3, 1, act=False),
             selayer(c2, c2),
-            DWConv_A(c2, c2, 3, 1)
+            DSConv_A(c2, c2, 3, 1)
         )
         self.residual = shortcut and c1 == c2
 
@@ -1258,7 +1258,7 @@ class HRBlock_SE(nn.Module):
 class HRStage_SE(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
         super(HRStage_SE, self).__init__()
-        self.m = nn.Sequential(*(HRBlock(c1, c2, shortcut) for _ in range(4)))
+        self.m = nn.Sequential(*(HRBlock_SE(c1, c2, shortcut) for _ in range(4)))
 
     def forward(self, x):
         return self.m(x)
