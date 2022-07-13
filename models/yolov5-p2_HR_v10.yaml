@@ -15,7 +15,7 @@ backbone:
   # [from, number, module, args]
   [[-1, 1, DSConv_A, [64, 6, 2, 2]], # 0   P1/2
    [-1, 1, DSConv_A, [128, 3, 2]],   # 1   P2/4
-   [-1, 1, HRStage, [128, 1]],       # 2
+   [-1, 1, HRStage_SE, [128]],       # 2
    [-1, 1, DSConv_A, [256, 3, 2]],   # 3   P3/8
    [2, 1, HRStage_SE, [128]],           # 4
    [3, 1, HRStage_SE, [256]],           # 5

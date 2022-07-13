@@ -868,7 +868,7 @@ class Upsample(nn.Module):
             layer.append(nn.Upsample(scale_factor=2.))
             layer.append(nn.BatchNorm2d(inchannel[i]))
             layer.append(nn.SiLU())
-            layer.append(nn.Conv2d(inchannel[i], outchannel[i], 1, 1, 0))
+            layer.append(DWConv(inchannel[i], outchannel[i], 1, 1, act=False))
         return nn.Sequential(*layer)
 
     def forward(self, x):
