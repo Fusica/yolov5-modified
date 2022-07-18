@@ -1249,10 +1249,11 @@ class HRBlock_SE(nn.Module):
             selayer(c2, c2),
             DSConv_A(c2, c2, 3, 1)
         )
+        self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
 
     def forward(self, x):
-        return x + self.extract(x) if self.residual else self.extract(x)
+        return self.bn(x) + self.extract(x) if self.residual else self.extract(x)
 
 
 class HRStage_SE(nn.Module):
