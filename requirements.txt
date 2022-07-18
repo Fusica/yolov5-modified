@@ -41,5 +41,5 @@ thop>=0.1.1  # FLOPs computation
 # pycocotools>=2.0  # COCO mAP
 # roboflow
 thop  # FLOPs computation
-timm~=0.5.4
+timm~=0.6.5
 einops
