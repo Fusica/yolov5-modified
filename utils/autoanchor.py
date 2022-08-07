@@ -10,8 +10,8 @@ import torch
 import yaml
 from tqdm import tqdm
 
-from utils.general import LOGGER, colorstr, emojis
 from utils.yolo_kmeans import k_means, wh_iou
+from utils.general import LOGGER, colorstr
 
 PREFIX = colorstr('AutoAnchor: ')
 
@@ -46,9 +46,9 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
     bpr, aat = metric(anchors.cpu().view(-1, 2))
     s = f'\n{PREFIX}{aat:.2f} anchors/target, {bpr:.3f} Best Possible Recall (BPR). '
     if bpr > 0.98:  # threshold to recompute
-        LOGGER.info(emojis(f'{s}Current anchors are a good fit to dataset ✅'))
+        LOGGER.info(f'{s}Current anchors are a good fit to dataset ✅')
     else:
-        LOGGER.info(emojis(f'{s}Anchors are a poor fit to dataset ⚠️, attempting to improve...'))
+        LOGGER.info(f'{s}Anchors are a poor fit to dataset ⚠️, attempting to improve...')
         na = m.anchors.numel() // 2  # number of anchors
         try:
             anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=50000, verbose=False)
@@ -63,7 +63,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
             s = f'{PREFIX}Done ✅ (optional: update model *.yaml to use these anchors in the future)'
         else:
             s = f'{PREFIX}Done ⚠️ (original anchors better than new anchors, proceeding with original anchors)'
-        LOGGER.info(emojis(s))
+        LOGGER.info(s)
 
 
 def kmean_anchors(dataset='./data/coco128.yaml', n=9, img_size=640, thr=4.0, gen=1000, verbose=True):
