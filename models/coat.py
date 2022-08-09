@@ -145,7 +145,7 @@ class ConvPosEnc(nn.Module):
 
         # Extract CLS token and image tokens.
         # cls_token,
-        img_tokens = x[:, :]  # [B, 1, C], [B, H*W, C]
+        img_tokens = x[:, :]  # [B, H*W, C]
 
         # Depthwise convolution.
         feat = img_tokens.transpose(1, 2).view(B, C, H, W)
@@ -162,7 +162,7 @@ class SerialBlock(nn.Module):
     """ Serial block class.
         Note: In this implementation, each serial block only contains a conv-attention and a FFN (MLP) module. """
 
-    def __init__(self, dim, num_heads, stage = 1, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
+    def __init__(self, dim, num_heads, stage=1, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, shared_cpe=None, shared_crpe=None):
         super().__init__()
         self.stage = stage

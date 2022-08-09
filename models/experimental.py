@@ -1164,7 +1164,7 @@ class CoaTBlock(nn.Module):
         if self.conv is not None:
             x = self.conv(x)
         b, _, w, h = x.shape
-        p = x.flatten(2).permute(0, 2, 1)
+        p = x.flatten(2).permute(0, 2, 1)  # B, N, C
         return self.tr(p).permute(0, 2, 1).reshape(b, self.c2, w, h)
 
 
@@ -1242,10 +1242,11 @@ class HRBlock_SE(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
         super(HRBlock_SE, self).__init__()
         assert c1 == c2, "must match channels"
+        c_ = int(c1 * 0.5)
         self.extract = nn.Sequential(
-            DSConv(c1, c2, 3, 1, act=False),
-            selayer(c2, c2),
-            DSConv_A(c2, c2, 3, 1)
+            DSConv_A(c1, c_, 3, 1, act=False),
+            selayer(c_, c_),
+            DSConv(c_, c2, 3, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
@@ -1285,7 +1286,11 @@ class HRStage_SE(nn.Module):
 
 # test = Add_Bi(5)
 #
-# input1 = [torch.rand(1, 64, 20, 20), torch.rand(1, 64, 1, 1), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20), torch.rand(1, 64, 20, 20)]
+# input1 = [torch.rand(1, 64, 20, 20),
+#           torch.rand(1, 64, 1, 1),
+#           torch.rand(1, 64, 20, 20),
+#           torch.rand(1, 64, 20, 20),
+#           torch.rand(1, 64, 20, 20)]
 #
 # output1 = test(input1)
 # print(output1.shape)
