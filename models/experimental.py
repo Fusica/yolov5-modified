@@ -3,7 +3,7 @@
 Experimental modules
 """
 from models.coat import SerialBlock
-from models.common import Conv, Bottleneck, C3, DWConv, autopad
+from models.common import Conv, Bottleneck, C3, DWConv, autopad, GhostConv
 from models.SwinTransformer import SwinTransformerBlock
 from models.cswin import CSWinTransformer
 from utils import torch_utils
@@ -953,7 +953,7 @@ class Add_Bi(nn.Module):  # pairwise add
         elif len(x) == 5:
             w = self.w4
             weight = w / (torch.sum(w, dim=0) + self.epsilon)
-            x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3] + weight[3] * x[3])
+            x = self.act(weight[0] * x[0] + weight[1] * x[1] + weight[2] * x[2] + weight[3] * x[3] + weight[4] * x[4])
         return x
 
 
@@ -969,6 +969,8 @@ class Add_weight(nn.Module):
             return x[0] + x[1] + x[2]
         elif self.num == 4:
             return x[0] + x[1] + x[2] + x[3]
+        elif self.num == 5:
+            return x[0] + x[1] + x[2] + x[3] + x[4]
 
 
 class ConvACON(Conv):
@@ -1242,11 +1244,10 @@ class HRBlock_SE(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
         super(HRBlock_SE, self).__init__()
         assert c1 == c2, "must match channels"
-        c_ = int(c1 * 0.5)
         self.extract = nn.Sequential(
-            DSConv_A(c1, c_, 3, 1, act=False),
-            selayer(c_, c_),
-            DSConv(c_, c2, 3, 1)
+            DSConv(c1, c1, 3, 1, act=False),
+            selayer(c1, c2),
+            DSConv_A(c2, c2, 3, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
@@ -1264,8 +1265,41 @@ class HRStage_SE(nn.Module):
         return self.m(x)
 
 
-# test = HRStage_SE(128, 128)
-# input = torch.rand(1, 128, 160, 160)
+class HRBlock_SE_Ghost(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(HRBlock_SE_Ghost, self).__init__()
+        assert c1 == c2, "must match channels"
+        self.extract = nn.Sequential(
+            GhostConv(c1, c2, 3, 1, act=False),
+            selayer(c2, c2)
+        )
+        self.bn = nn.BatchNorm2d(c1)
+        self.residual = shortcut and c1 == c2
+
+    def forward(self, x):
+        return self.bn(x) + self.extract(x) if self.residual else self.extract(x)
+
+
+class HRStage_SE_Ghost(nn.Module):
+    def __init__(self, c1, c2, shortcut=True):
+        super(HRStage_SE_Ghost, self).__init__()
+        self.m = nn.Sequential(*(HRBlock_SE_Ghost(c1, c2, shortcut) for _ in range(4)))
+
+    def forward(self, x):
+        return self.m(x)
+
+
+class space_to_depth(nn.Module):
+    # Changing the dimension of the Tensor
+    def __init__(self, dimension=1):
+        super().__init__()
+        self.d = dimension
+
+    def forward(self, x):
+         return torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1)
+
+# test = HRStage_SE(512, 256)
+# input = torch.rand(1, 512, 80, 80)
 #
 # startTime = time.time()
 # output = test(input)

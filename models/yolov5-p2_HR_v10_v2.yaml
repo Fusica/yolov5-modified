@@ -5,10 +5,10 @@ nc: 80  # number of classes
 depth_multiple: 0.33  # model depth multiple
 width_multiple: 0.25  # layer channel multiple
 anchors:
-  - [8,11, 22,14, 13,30]
-  - [30,29, 26,61, 62,39]
-  - [50,86, 103,81, 82,175]
-  - [188,140, 179,297, 414,336]
+  - [32,36, 34,86, 73,57]
+  - [63,132, 123,102, 114,188]
+  - [218,164, 148,320, 250,301]
+  - [465,223, 334,440, 536,401]
 
 # YOLOv5 v6.0 backbone
 backbone:
@@ -73,25 +73,22 @@ backbone:
    [49, 1, HRStage_SE, [128]],          # 54
    [50, 1, HRStage_SE, [256]],          # 55
    [51, 1, HRStage_SE, [512]],          # 56
-   [52, 3, C3CoaT, [1024]],          # 57
-   [53, 3, C3CoaT, [2048]],          # 58
-   [54, 1, Downsample, [256, 1]],    # 59  Start of first layer
+   [52, 3, C3CoaT, [1024]],             # 57
+   [53, 3, C3CoaT, [2048]],             # 58
+
+   [54, 1, Downsample, [256, 1]],       # 59  Start of first layer
    [54, 1, Downsample, [512, 2]],
    [54, 1, Downsample, [1024, 3]],
-   [54, 1, Downsample, [2048, 4]],
-   [55, 1, Upsample, [128, 1]],      # 63  Start of second layer
+   [55, 1, Upsample, [128, 1]],         # 62  Start of second layer
    [55, 1, Downsample, [512, 1]],
    [55, 1, Downsample, [1024, 2]],
-   [55, 1, Downsample, [2048, 3]],
-   [56, 1, Upsample, [128, 2]],      # 67  Start of third layer
+   [56, 1, Upsample, [128, 2]],         # 65  Start of third layer
    [56, 1, Upsample, [256, 1]],
    [56, 1, Downsample, [1024, 1]],
-   [56, 1, Downsample, [2048, 2]],
-   [57, 1, Upsample, [128, 3]],      # 71  Start of fourth layer
+   [57, 1, Upsample, [128, 3]],         # 68  Start of fourth layer
    [57, 1, Upsample, [256, 2]],
    [57, 1, Upsample, [512, 1]],
-   [57, 1, Downsample, [2048, 1]],
-   [58, 1, Upsample, [128, 4]],      # 75 Start of fifth layer
+   [58, 1, Upsample, [128, 4]],         # 71 Start of fifth layer
    [58, 1, Upsample, [256, 3]],
    [58, 1, Upsample, [512, 2]],
    [58, 1, Upsample, [1024, 1]],
@@ -100,13 +97,13 @@ backbone:
 # YOLOv5 v6.0 head with (P2, P3, P4, P5) outputs
 head:
   [
-   [[54, 63, 67, 71, 75], 1, Add_Bi, [5]],
-   [-1, 1, HRStage_SE, [128, False]],             # 80
-   [[55, 59, 68, 72, 76], 1, Add_Bi, [5]],
-   [-1, 1, HRStage_SE, [256, False]],             # 82
-   [[56, 60, 64, 73, 77], 1, Add_Bi, [5]],
-   [-1, 1, HRStage_SE, [512, False]],             # 84
-   [[57, 61, 65, 69, 78], 1, Add_Bi, [5]],
-   [-1, 1, C3CoaT, [1024]],                       # 86
-   [[80, 82, 84, 86], 1, Detect, [nc, anchors]],  # Detect(P2, P3, P4, P5)
+   [[54, 62, 65, 68, 71], 1, Add_Bi, [5]],
+   [-1, 1, HRStage_SE, [128, False]],             # 76
+   [[55, 59, 66, 69, 72], 1, Add_Bi, [5]],
+   [-1, 1, HRStage_SE, [256, False]],             # 78
+   [[56, 60, 63, 70, 73], 1, Add_Bi, [5]],
+   [-1, 1, HRStage_SE, [512, False]],             # 80
+   [[57, 61, 64, 67, 74], 1, Add_Bi, [5]],
+   [-1, 1, C3CoaT, [1024]],                       # 82
+   [[76, 78, 80, 82], 1, Detect, [nc, anchors]],  # Detect(P2, P3, P4, P5)
   ]

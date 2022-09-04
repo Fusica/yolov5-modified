@@ -269,7 +269,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                  Reshape, ECA, PoolECA, ACBlock, ACBlocks, DSConv, DSConv_A, NONLocalBlock2D, PF, PFBlock, C3DF,
                  DFConv, Gap, C3STR, PixShuffle, C3Conv, ConvCBAM, CBAM, CoordAtt, C3CBAM, C3CA, Upsample,
                  Downsample, C3DS, ConvACON, HRStage, C3Involution, Involution, CSWinBlock, DiBlock, C3CoaT, CTGBlock,
-                 LKA_CABlock, HRStage_SE):
+                 LKA_CABlock, HRStage_SE, HRStage_SE_Ghost):
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
@@ -293,6 +293,8 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
                 args[1] = [list(range(args[1] * 2))] * len(f)
         elif m is Contract:
             c2 = ch[f] * args[0] ** 2
+        elif m is space_to_depth:
+            c2 = 4 * ch[f]
         elif m is Expand:
             c2 = ch[f] // args[0] ** 2
         else:
@@ -313,7 +315,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cfg', type=str, default='yolov5-p2_HR_v16.yaml', help='model.yaml')
+    parser.add_argument('--cfg', type=str, default='yolov5-p2_HR_v10_v5.yaml', help='model.yaml')
     parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--profile', action='store_true', help='profile model speed')
