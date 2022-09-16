@@ -762,8 +762,10 @@ class Classify(nn.Module):
         return self.flat(self.conv(z))  # flatten to x(b,c2)
 
 
-# test = nn.ConvTranspose2d(64, 64, 3, 2, 1, 1)
+# test = Concat()
 #
-# input = torch.rand(1, 64, 40, 40)
-# output = test(input)
+# input1 = torch.rand(1, 64, 40, 40)
+# input2 = torch.rand(1, 64, 40, 40)
+#
+# output = test([input1, input2])
 # print(output.shape)

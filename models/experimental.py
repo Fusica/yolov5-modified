@@ -990,10 +990,11 @@ class HRBlock(nn.Module):
             Conv(c1, c2, 3, 1, act=False),
             Conv(c2, c2, 3, 1)
         )
+        self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
 
     def forward(self, x):
-        return x + self.extract(x) if self.residual else self.extract(x)
+        return self.bn(x) + self.extract(x) if self.residual else self.extract(x)
 
 
 class HRStage(nn.Module):
@@ -1265,13 +1266,15 @@ class HRStage_SE(nn.Module):
         return self.m(x)
 
 
-class HRBlock_SE_Ghost(nn.Module):
+class HRBlock_SE_LK(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
-        super(HRBlock_SE_Ghost, self).__init__()
+        super(HRBlock_SE_LK, self).__init__()
         assert c1 == c2, "must match channels"
+        c_ = int(c1 * 0.5)
         self.extract = nn.Sequential(
-            GhostConv(c1, c2, 3, 1, act=False),
-            selayer(c2, c2)
+            Conv(c1, c_, 1, 1, act=False),
+            DWConv_A(c_, c_, 7, 1),
+            Conv(c_, c2, 1, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
@@ -1280,26 +1283,17 @@ class HRBlock_SE_Ghost(nn.Module):
         return self.bn(x) + self.extract(x) if self.residual else self.extract(x)
 
 
-class HRStage_SE_Ghost(nn.Module):
+class HRStage_SE_LK(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
-        super(HRStage_SE_Ghost, self).__init__()
-        self.m = nn.Sequential(*(HRBlock_SE_Ghost(c1, c2, shortcut) for _ in range(4)))
+        super(HRStage_SE_LK, self).__init__()
+        self.m = nn.Sequential(*(HRBlock_SE_LK(c1, c2, shortcut) for _ in range(4)))
 
     def forward(self, x):
         return self.m(x)
 
 
-class space_to_depth(nn.Module):
-    # Changing the dimension of the Tensor
-    def __init__(self, dimension=1):
-        super().__init__()
-        self.d = dimension
-
-    def forward(self, x):
-         return torch.cat([x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]], 1)
-
-# test = HRStage_SE(512, 256)
-# input = torch.rand(1, 512, 80, 80)
+# test = HRStage_SE_LK(128, 128)
+# input = torch.rand(1, 128, 160, 160)
 #
 # startTime = time.time()
 # output = test(input)

@@ -1,0 +1,78 @@
+# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
+
+# Parameters
+nc: 80  # number of classes
+depth_multiple: 0.33  # model depth multiple
+width_multiple: 0.25  # layer channel multiple
+anchors:
+  - [8,11, 22,14, 13,30]
+  - [30,29, 26,61, 62,39]
+  - [50,86, 103,81, 82,175]
+  - [188,140, 179,297, 414,336]
+
+# YOLOv5 v6.0 backbone
+backbone:
+  # [from, number, module, args]
+  [[-1, 1, Conv, [64, 6, 2, 2]],      # 0   P1/2
+   [-1, 1, Conv, [128, 3, 2]],        # 1   P2/4
+   [-1, 1, HRStage, [128]],           # 2
+   [-1, 1, Conv, [256, 3, 2]],        # 3   P3/8
+   [2, 1, HRStage, [128]],            # 4
+   [3, 1, HRStage, [256]],            # 5
+
+   [4, 1, Downsample, [256, 1]],      # 6   Start of first layer
+   [4, 1, Downsample, [512, 2]],
+   [5, 1, Upsample, [128, 1]],        # 8   Start of second layer
+   [5, 1, Conv, [512, 3, 2]],         #     P4/16
+   [[4, 8], 1, Add_weight, [2]],      # 10  Combination start
+   [[5, 6], 1, Add_weight, [2]],
+   [[7, 9], 1, Add_weight, [2]],
+   [10, 1, HRStage, [128]],           # 13
+   [11, 1, HRStage, [256]],           # 14
+   [12, 1, HRStage, [512]],           # 15
+
+   [13, 1, Downsample, [256, 1]],     # 16  Start of first layer
+   [13, 1, Downsample, [512, 2]],
+   [13, 1, Downsample, [1024, 3]],
+   [14, 1, Upsample, [128, 1]],       # 19  Start of second layer
+   [14, 1, Downsample, [512, 1]],
+   [14, 1, Downsample, [1024, 2]],
+   [15, 1, Upsample, [128, 2]],       # 22  Start of third layer
+   [15, 1, Upsample, [256, 1]],
+   [15, 1, Conv, [1024, 3, 2]],       #     P5/32
+   [[13, 19, 22], 1, Add_weight, [3]],   # 25  Combination start
+   [[14, 16, 23], 1, Add_weight, [3]],   # 26
+   [[15, 17, 20], 1, Add_weight, [3]],   # 27
+   [[18, 21, 24], 1, Add_weight, [3]],   # 28
+   [25, 1, HRStage, [128]],              # 29
+   [26, 1, HRStage, [256]],
+   [27, 1, HRStage, [512]],
+   [28, 1, HRStage, [1024]],
+
+   [29, 1, Downsample, [256, 1]],    # 33  Start of first layer
+   [29, 1, Downsample, [512, 2]],
+   [29, 1, Downsample, [1024, 3]],
+   [30, 1, Upsample, [128, 1]],      # 36  Start of second layer
+   [30, 1, Downsample, [512, 1]],
+   [30, 1, Downsample, [1024, 2]],
+   [31, 1, Upsample, [128, 2]],      # 39  Start of third layer
+   [31, 1, Upsample, [256, 1]],
+   [31, 1, Downsample, [1024, 1]],
+   [32, 1, Upsample, [128, 3]],      # 42  Start of fourth layer
+   [32, 1, Upsample, [256, 2]],
+   [32, 1, Upsample, [512, 1]],
+  ]
+
+# YOLOv5 v6.0 head with (P2, P3, P4, P5) outputs
+head:
+  [
+   [[29, 36, 39, 42], 1, Add_Bi, [4]],
+   [-1, 1, HRStage, [128, False]],           # 46
+   [[30, 33, 40, 43], 1, Add_Bi, [4]],
+   [-1, 1, HRStage, [256, False]],           # 48
+   [[31, 34, 37, 44], 1, Add_Bi, [4]],
+   [-1, 1, HRStage, [512, False]],           # 50
+   [[32, 35, 38, 41], 1, Add_Bi, [4]],
+   [-1, 1, HRStage, [1024, False]],          # 52
+   [[46, 48, 50, 52], 1, Detect, [nc, anchors]],  # Detect(P2, P3, P4, P5)
+  ]
