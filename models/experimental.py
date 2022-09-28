@@ -1273,7 +1273,7 @@ class HRBlock_SE_LK(nn.Module):
         c_ = int(c1 * 0.5)
         self.extract = nn.Sequential(
             Conv(c1, c_, 1, 1, act=False),
-            DWConv_A(c_, c_, 7, 1),
+            DSConv_A(c_, c_, 17, 1, 8),
             Conv(c_, c2, 1, 1)
         )
         self.bn = nn.BatchNorm2d(c1)

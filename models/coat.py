@@ -73,13 +73,13 @@ class ConvRelPosEnc(nn.Module):
         q_img = q  # [B, h, H*W, Ch]
         v_img = v  # [B, h, H*W, Ch]
 
-        v_img = v_img.transpose(-1, -2).reshape(B, h * Ch, H, W)
+        v_img = v_img.transpose(-1, -2).reshape(B, h * Ch, H, W).contiguous()
         v_img_list = torch.split(v_img, self.channel_splits, dim=1)  # Split according to channels
         conv_v_img_list = []
         for i, conv in enumerate(self.conv_list):
             conv_v_img_list.append(conv(v_img_list[i]))
         conv_v_img = torch.cat(conv_v_img_list, dim=1)
-        conv_v_img = conv_v_img.reshape(B, h, Ch, H * W).transpose(-1, -2)
+        conv_v_img = conv_v_img.reshape(B, h, Ch, H * W).transpose(-1, -2).contiguous()
 
         EV_hat = q_img * conv_v_img
         # EV_hat = F.pad(EV_hat, (0, 0, 1, 0, 0, 0))  # [B, h, N, Ch].
@@ -112,7 +112,7 @@ class FactorAttnConvRelPosEnc(nn.Module):
 
         # Factorized attention.
         k_softmax = k.softmax(dim=2)
-        factor_att = k_softmax.transpose(-1, -2) @ v
+        factor_att = k_softmax.transpose(-1, -2).contiguous() @ v
         factor_att = q @ factor_att
 
         # Convolutional relative position encoding.
@@ -120,7 +120,7 @@ class FactorAttnConvRelPosEnc(nn.Module):
 
         # Merge and reshape.
         x = self.scale * factor_att + crpe
-        x = x.transpose(1, 2).reshape(B, N, C)  # [B, h, N, Ch] -> [B, N, h, Ch] -> [B, N, C]
+        x = x.transpose(1, 2).reshape(B, N, C).contiguous()  # [B, h, N, Ch] -> [B, N, h, Ch] -> [B, N, C]
 
         # Output projection.
         x = self.proj(x)
@@ -148,9 +148,9 @@ class ConvPosEnc(nn.Module):
         img_tokens = x[:, :]  # [B, H*W, C]
 
         # Depthwise convolution.
-        feat = img_tokens.transpose(1, 2).view(B, C, H, W)
+        feat = img_tokens.transpose(1, 2).view(B, C, H, W).contiguous()
         x = self.proj(feat) + feat
-        x = x.flatten(2).transpose(1, 2)
+        x = x.flatten(2).transpose(1, 2).contiguous()
 
         # Combine with CLS token.
         # x = torch.cat((cls_token, x), dim=1)
