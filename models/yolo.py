@@ -266,17 +266,15 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         n = n_ = max(round(n * gd), 1) if n > 1 else n  # depth gain
         if m in (Conv, GhostConv, Bottleneck, GhostBottleneck, SPP, SPPF, DWConv, MixConv2d, Focus, CrossConv,
                  BottleneckCSP, C3, C3TR, C3SPP, C3Ghost, nn.ConvTranspose2d, DWConvTranspose2d, DConv, Pool,
-                 Reshape, ECA, PoolECA, ACBlock, ACBlocks, DSConv, DSConv_A, NONLocalBlock2D, PF, PFBlock, C3DF,
-                 DFConv, Gap, C3STR, PixShuffle, C3Conv, ConvCBAM, CBAM, CoordAtt, C3CBAM, C3CA, Upsample,
-                 Downsample, C3DS, ConvACON, HRStage, C3Involution, Involution, CSWinBlock, DiBlock, C3CoaT, CTGBlock,
-                 LKA_CABlock, HRStage_SE, HRStage_SE_LK):
+                 Reshape, ECA, PoolECA, ACBlock, ACBlocks, DSConv, DSConv_A, Gap, C3STR, PixShuffle, ConvCBAM, CBAM,
+                 CoordAtt, C3CBAM, C3CA, Upsample,Downsample, ConvACON, HRStage, CSWinBlock, C3CoaT, HRStage_SE,
+                 HRStage_SE_LK, C3SA, C3S2, C3CCA):
             c1, c2 = ch[f], args[0]
             if c2 != no:  # if not output
                 c2 = make_divisible(c2 * gw, 8)
 
             args = [c1, c2, *args[1:]]
-            if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3DF, C3STR, C3Conv, C3CBAM, C3CA, C3DS, C3Involution, DiBlock,
-                     C3CoaT]:
+            if m in [BottleneckCSP, C3, C3TR, C3Ghost, C3STR, C3CBAM, C3CA, C3CoaT, C3SA, C3CCA, C3S2]:
                 args.insert(2, n)  # number of repeats
                 n = 1
         elif m is nn.BatchNorm2d:
@@ -313,7 +311,7 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--cfg', type=str, default='yolov5best_v2.yaml', help='model.yaml')
+    parser.add_argument('--cfg', type=str, default='yolov5-p2_HR_v18.yaml', help='model.yaml')
     parser.add_argument('--batch-size', type=int, default=1, help='total batch size for all GPUs')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--profile', action='store_true', help='profile model speed')

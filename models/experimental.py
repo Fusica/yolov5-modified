@@ -6,21 +6,17 @@ from models.coat import SerialBlock
 from models.common import Conv, Bottleneck, C3, DWConv, autopad, GhostConv
 from models.SwinTransformer import SwinTransformerBlock
 from models.cswin import CSWinTransformer
-from utils import torch_utils
 from utils.activations import AconC
-
 from utils.downloads import attempt_download
 
 import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.autograd import Variable
+from torch.nn import init
+from torch.nn.parameter import Parameter
 
 import numpy as np
-
-from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-from torchvision.ops import deform_conv2d
 import time
 
 
@@ -299,296 +295,6 @@ class ACBlocks(nn.Module):
         return self.act(self.bn(self.acblock2(self.acblock1(x))))
 
 
-class _NonLocalBlockND(nn.Module):
-    def __init__(self, in_channels, out_channels, inter_channels=None, dimension=3, sub_sample=True, bn_layer=True):
-        """
-        :param in_channels:
-        :param inter_channels:
-        :param dimension:
-        :param sub_sample:
-        :param bn_layer:
-        """
-        super(_NonLocalBlockND, self).__init__()
-
-        assert dimension in [1, 2, 3]
-
-        self.dimension = dimension
-        self.sub_sample = sub_sample
-
-        self.in_channels = in_channels
-        self.inter_channels = inter_channels
-
-        if self.inter_channels is None:
-            self.inter_channels = in_channels // 2
-            if self.inter_channels == 0:
-                self.inter_channels = 1
-
-        if dimension == 3:
-            conv_nd = nn.Conv3d
-            max_pool_layer = nn.MaxPool3d(kernel_size=(1, 2, 2))
-            bn = nn.BatchNorm3d
-        elif dimension == 2:
-            conv_nd = nn.Conv2d
-            max_pool_layer = nn.MaxPool2d(kernel_size=(2, 2))
-            bn = nn.BatchNorm2d
-        else:
-            conv_nd = nn.Conv1d
-            max_pool_layer = nn.MaxPool1d(kernel_size=(2))
-            bn = nn.BatchNorm1d
-
-        self.g = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                         kernel_size=1, stride=1, padding=0)
-
-        if bn_layer:
-            self.W = nn.Sequential(
-                conv_nd(in_channels=self.inter_channels, out_channels=self.in_channels,
-                        kernel_size=1, stride=1, padding=0),
-                bn(self.in_channels)
-            )
-            nn.init.constant_(self.W[1].weight, 0)
-            nn.init.constant_(self.W[1].bias, 0)
-        else:
-            self.W = conv_nd(in_channels=self.inter_channels, out_channels=self.in_channels,
-                             kernel_size=1, stride=1, padding=0)
-            nn.init.constant_(self.W.weight, 0)
-            nn.init.constant_(self.W.bias, 0)
-
-        self.theta = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                             kernel_size=1, stride=1, padding=0)
-        self.phi = conv_nd(in_channels=self.in_channels, out_channels=self.inter_channels,
-                           kernel_size=1, stride=1, padding=0)
-
-        if sub_sample:
-            self.g = nn.Sequential(self.g, max_pool_layer)
-            self.phi = nn.Sequential(self.phi, max_pool_layer)
-
-    def forward(self, x, return_nl_map=False):
-        """
-        :param x: (b, c, t, h, w)
-        :param return_nl_map: if True return z, nl_map, else only return z.
-        :return:
-        """
-
-        batch_size = x.size(0)
-
-        g_x = self.g(x).view(batch_size, self.inter_channels, -1)
-        g_x = g_x.permute(0, 2, 1)
-
-        theta_x = self.theta(x).view(batch_size, self.inter_channels, -1)
-        theta_x = theta_x.permute(0, 2, 1)
-        phi_x = self.phi(x).view(batch_size, self.inter_channels, -1)
-        f = torch.matmul(theta_x, phi_x)
-        f_div_C = F.softmax(f, dim=-1)
-
-        y = torch.matmul(f_div_C, g_x)
-        y = y.permute(0, 2, 1).contiguous()
-        y = y.view(batch_size, self.inter_channels, *x.size()[2:])
-        W_y = self.W(y)
-        z = W_y + x
-
-        if return_nl_map:
-            return z, f_div_C
-        return z
-
-
-class NONLocalBlock2D(_NonLocalBlockND):
-    def __init__(self, in_channels, out_channels, inter_channels=None, sub_sample=False, bn_layer=True):
-        super(NONLocalBlock2D, self).__init__(in_channels,
-                                              out_channels,
-                                              inter_channels=inter_channels,
-                                              dimension=2, sub_sample=sub_sample,
-                                              bn_layer=bn_layer, )
-
-
-class GroupNorm(nn.GroupNorm):
-    """
-    Group Normalization with 1 group.
-    Input: tensor in shape [B, C, H, W]
-    """
-
-    def __init__(self, num_channels, **kwargs):
-        super().__init__(1, num_channels, **kwargs)
-
-
-class Pooling(nn.Module):
-    """
-    Implementation of pooling for PoolFormer
-    --pool_size: pooling size
-    """
-
-    def __init__(self, pool_size=3):
-        super().__init__()
-        self.pool = nn.MaxPool2d(
-            pool_size, stride=1, padding=pool_size // 2)
-
-    def forward(self, x):
-        return self.pool(x) - x
-
-
-class Mlp(nn.Module):
-    """
-    Implementation of MLP with 1*1 convolutions.
-    Input: tensor with shape [B, C, H, W]
-    """
-
-    def __init__(self, in_features, hidden_features=None,
-                 out_features=None, act_layer=nn.SiLU, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Conv2d(in_features, hidden_features, 1)
-        self.act = act_layer()
-        self.fc2 = nn.Conv2d(hidden_features, out_features, 1)
-        self.drop = nn.Dropout(drop)
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Conv2d):
-            trunc_normal_(m.weight, std=.02)
-            if m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
-
-
-class PFBlock(nn.Module):
-    """
-    Implementation of one PoolFormer block.
-    --dim: embedding dim
-    --pool_size: pooling size
-    --mlp_ratio: mlp expansion ratio
-    --act_layer: activation
-    --norm_layer: normalization
-    --drop: dropout rate
-    --drop path: Stochastic Depth,
-        refer to https://arxiv.org/abs/1603.09382
-    --use_layer_scale, --layer_scale_init_value: LayerScale,
-        refer to https://arxiv.org/abs/2103.17239
-    """
-
-    def __init__(self, dim, c2, down_sampling=True, pool_size=3, mlp_ratio=4.,
-                 act_layer=nn.SiLU, norm_layer=GroupNorm,
-                 drop=0., drop_path=0.,
-                 use_layer_scale=True, layer_scale_init_value=1e-5):
-
-        super().__init__()
-        self.norm1 = norm_layer(dim)
-        self.token_mixer = Pooling(pool_size=pool_size)
-        self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim,
-                       act_layer=act_layer, drop=drop)
-        self.conv = nn.Conv2d(dim, c2, 3, 2, 1)
-        self.downsample = down_sampling
-
-        # The following two techniques are useful to train deep PoolFormers.
-        self.drop_path = DropPath(drop_path) if drop_path > 0. \
-            else nn.Identity()
-        self.use_layer_scale = use_layer_scale
-        if use_layer_scale:
-            self.layer_scale_1 = nn.Parameter(
-                layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-            self.layer_scale_2 = nn.Parameter(
-                layer_scale_init_value * torch.ones((dim)), requires_grad=True)
-
-    def forward(self, x):
-        if self.use_layer_scale:
-            x = x + self.drop_path(
-                self.layer_scale_1.unsqueeze(-1).unsqueeze(-1)
-                * self.token_mixer(self.norm1(x)))
-            x = x + self.drop_path(
-                self.layer_scale_2.unsqueeze(-1).unsqueeze(-1)
-                * self.mlp(self.norm2(x)))
-            if self.downsample:
-                x = self.conv(x)
-        else:
-            x = x + self.drop_path(self.token_mixer(self.norm1(x)))
-            x = x + self.drop_path(self.mlp(self.norm2(x)))
-            if self.downsample:
-                x = self.conv(x)
-        return x
-
-
-class PF(nn.Module):
-    # module with PoolformerBlock()
-    def __init__(self, c1, c2, n=1):
-        super().__init__()
-        self.pf = nn.Sequential(*(PFBlock(c1, c2, False) for _ in range(n)))
-
-    def forward(self, x):
-        return self.pf(x)
-
-
-class DFConv(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, padding=1):
-        super(DFConv, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride if type(stride) == tuple else (stride, stride)
-        self.padding = padding if type(stride) == tuple else (padding, padding)
-
-        # init weight and bias
-        self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels, kernel_size, kernel_size))
-        self.bias = nn.Parameter(torch.Tensor(out_channels))
-
-        # offset conv
-        self.conv_offset_mask = nn.Conv2d(in_channels, 3 * kernel_size * kernel_size, kernel_size=kernel_size,
-                                          stride=stride, padding=self.padding, bias=True)
-
-        # init
-        self.reset_parameters()
-        self._init_weight()
-
-    def reset_parameters(self):
-        n = self.in_channels * (self.kernel_size ** 2)
-        stdv = 1. / math.sqrt(n)
-        self.weight.data.uniform_(-stdv, stdv)
-        self.bias.data.zero_()
-
-    def _init_weight(self):
-        # init offset_mask conv
-        nn.init.constant_(self.conv_offset_mask.weight, 0.)
-        nn.init.constant_(self.conv_offset_mask.bias, 0.)
-
-    def forward(self, x):
-        out = self.conv_offset_mask(x)
-        o1, o2, mask = torch.chunk(out, 3, dim=1)
-        offset = torch.cat((o1, o2), dim=1)
-        mask = torch.sigmoid(mask)
-
-        x = deform_conv2d(input=x, offset=offset, weight=self.weight, bias=self.bias, padding=self.padding, mask=mask,
-                          stride=self.stride)
-        return x
-
-
-class BottleneckDF(nn.Module):
-    # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = DFConv(c_, c2, 3, 1)
-        self.add = shortcut and c1 == c2
-
-    def forward(self, x):
-        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
-
-
-class C3DF(C3):
-    # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, e=e)
-        c_ = int(c2 * e)
-        self.m = nn.Sequential(*(BottleneckDF(c_, c_, shortcut, 1.0) for _ in range(n)))
-
-
 class C3STR(C3):
     # C3 module with SwinTransformerBlock()
     def __init__(self, c1, c2, n=3, shortcut=True, g=1, e=1):
@@ -619,20 +325,6 @@ class PixShuffle(nn.Module):
 
     def forward(self, x):
         return self.act(self.bn(self.shuffle(x)))
-
-
-class C3Conv(nn.Module):
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = Conv(c1, c_, 1, 1)
-        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
-        self.cv4 = Conv(c1, c2, 3, 2)
-
-    def forward(self, x):
-        return self.cv4(self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1)))
 
 
 # add CBAM
@@ -898,28 +590,11 @@ class Downsample(nn.Module):
             outchannel = [self.inchannel * 2, self.inchannel * 4, self.inchannel * 8, self.outchannel]
 
         for i in range(self.num):
-            layer.append(DSConv(inchannel[i], outchannel[i], 3, 2, 1))
+            layer.append(DSConv_A(inchannel[i], outchannel[i], 3, 2, 1))
         return nn.Sequential(*layer)
 
     def forward(self, x):
         return self.downsample(x)
-
-
-class BottleneckDS(Bottleneck):
-    # Deep Separate convolution Bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
-        super().__init__(c1, c2, shortcut, g, e)
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = Conv(c1, c_, 1, 1)
-        self.cv2 = DSConv(c_, c2, 3, 1)
-
-
-class C3DS(C3):
-    # CSP Bottleneck with 3 Deep Separate convolutions
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*(BottleneckDS(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
 
 
 class Add_Bi(nn.Module):  # pairwise add
@@ -1011,59 +686,6 @@ class DGBlock(nn.Module):
         super(DGBlock, self).__init__()
 
 
-class Involution(nn.Module):
-    def __init__(self, c1, c2, kernel_size, stride):
-        super(Involution, self).__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.channels = c1
-        reduction_ratio = 4
-        self.group_channels = 16
-        self.groups = self.channels // self.group_channels
-        self.conv1 = ConvACON(c1, c1 // reduction_ratio, 1, 1)
-        # nn.Sequential(
-        #     nn.Conv2d(c1, c1 // reduction_ratio, 1, 1, 0),
-        #     nn.BatchNorm2d(c1 // reduction_ratio),
-        #     nn.ReLU()
-        # )
-        self.conv2 = ConvACON(c1 // reduction_ratio, kernel_size ** 2 * self.groups, 1, 1, act=False)
-        if stride > 1:
-            self.avgpool = nn.AvgPool2d(stride, stride)
-        self.unfold = nn.Unfold(kernel_size, 1, (kernel_size - 1) // 2, stride)
-
-    def forward(self, x):
-        weight = self.conv2(self.conv1(x if self.stride == 1 else self.avgpool(x)))
-        b, c, h, w = weight.shape
-        weight = weight.view(b, self.groups, self.kernel_size ** 2, h, w).unsqueeze(2)
-        out = self.unfold(x).view(b, self.groups, self.group_channels, self.kernel_size ** 2, h, w)
-        out = (weight * out).sum(dim=3).view(b, self.channels, h, w)
-        return out
-
-
-class BottleneckInvolution(nn.Module):
-    def __init__(self, c1, c2, shortcut=True, e=4.0):  # ch_in, ch_out, shortcut, groups, expansion
-        super().__init__()
-        c_ = int(c2 * e)  # hidden channels
-        self.cv1 = ConvACON(c1, c_, 1, 1)
-        self.cv2 = nn.Sequential(
-            Involution(c_, c_, 7, 1),
-            nn.BatchNorm2d(c_),
-            nn.SiLU()
-        )
-        self.cv3 = ConvACON(c_, c2, 1, 1, act=False)
-        self.add = shortcut and c1 == c2
-
-    def forward(self, x):
-        return x + self.cv3(self.cv2(self.cv1(x))) if self.add else self.cv3(self.cv2(self.cv1(x)))
-
-
-class C3Involution(C3):
-    def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
-        super().__init__(c1, c2, n, shortcut, g, e)
-        c_ = int(c2 * e)  # hidden channels
-        self.m = nn.Sequential(*(BottleneckInvolution(c_, c_) for _ in range(n)))
-
-
 class CSWinBlock(CSWinTransformer):
     """
     default:
@@ -1072,86 +694,6 @@ class CSWinBlock(CSWinTransformer):
 
     def __init__(self, c1, c2, stage, embed_dim, split_size, depth):
         super(CSWinBlock, self).__init__(c1, c2, stage, embed_dim, split_size, depth)
-
-
-class DiBlock(nn.Module):
-    def __init__(self, c1, c2, n, shortcut=True):
-        super(DiBlock, self).__init__()
-        assert c1 == c2, "c1 and c2 must be equal"
-        self.shortcut = shortcut
-        c_ = int(c1 // 2)
-        self.deformable = DFConv(c_, c_)
-        self.involution = C3Involution(c_, c_, n)
-        self.conv = DWConv_A(c1, c2, 3, 1)
-        self.bn = nn.BatchNorm2d(c2)
-        self.act = AconC(c2)
-
-    def forward(self, x):
-        residual = x
-        x = torch.chunk(x, 2, dim=1)
-        df_output = self.deformable(x[0])
-        iv_output = self.involution(x[1])
-        cv_output = self.conv(residual)
-
-        return self.act(self.bn(torch.cat((df_output, iv_output), dim=1) + cv_output))
-
-
-class CTGBlock(nn.Module):
-    """
-    Inspired by iFormer, use two main path to extract features, Involution, Maxpool, CoaT
-    """
-
-    def __init__(self, c1, c2, n, shortcut=True):
-        super(CTGBlock, self).__init__()
-        assert c1 == c2, "c1 and c2 must be equal"
-        self.shortcut = shortcut
-        c_h, c_l = None, None
-        if n == 1:
-            # 160*160 [3/8, 3/8, 1/4]
-            c_h = int(c1 // 8 * 3)
-            c_l = int(c1 // 1 / 4)
-        elif n == 2:
-            # 80*80 [1/4, 1/4, 2/4]
-            c_h = int(c1 // 4)
-            c_l = int(c1 // 2)
-        elif n == 3:
-            # 40*40 [1/8, 1/8, 3/4]
-            c_h = int(c1 // 8)
-            c_l = int(c1 // 4 * 3)
-        self.involution = BottleneckInvolution(c_h, c_h)
-        self.maxpool = nn.MaxPool2d(3, 1, 1)
-        self.conv = ConvACON(c_h, c_h, 3, 1, 1)
-        self.coat = CoaTBlock(c_l, c_l, 2)
-        self.coordatt = CoordAtt(c1, c2)
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.bn = nn.BatchNorm2d(c2)
-        self.act = AconC(c2)
-        self.n = n
-
-    def forward(self, x):
-        residual = x
-        if self.n == 1:
-            x_h = int(x.shape[1] // 8 * 3)
-            x_l = int(x.shape[1] // 4)
-            x = torch.split(x, [x_h, x_h, x_l], dim=1)
-        elif self.n == 2:
-            x_h = int(x.shape[1] // 4)
-            x_l = int(x.shape[1] // 2)
-            x = torch.split(x, [x_h, x_h, x_l], dim=1)
-        elif self.n == 3:
-            x_h = int(x.shape[1] // 8)
-            x_l = int(x.shape[1] // 4 * 3)
-            x = torch.split(x, [x_h, x_h, x_l], dim=1)
-        else:
-            assert "only operate on first 3 maps"
-        x_h1, x_h2 = x[0], x[1]  # x_h[0], x_h[1]: maxpool and involution
-        x_l = x[2]
-        output_h1 = self.conv(self.maxpool(x_h1))
-        output_h2 = self.involution(x_h2)
-        output_l = self.coat(x_l)
-        output_add = self.coordatt(self.gap(residual))
-
-        return residual + self.act(self.bn(output_add + torch.cat((output_h1, output_h2, output_l), dim=1)))
 
 
 class CoaTBlock(nn.Module):
@@ -1179,48 +721,6 @@ class C3CoaT(C3):
         self.m = CoaTBlock(c_, c_, n)
 
 
-class LKA(nn.Module):
-    def __init__(self, c1):
-        super().__init__()
-        self.conv0 = nn.Conv2d(c1, c1, 5, padding=2, groups=c1)
-        # padding is too big
-        self.conv_spatial1 = nn.Conv2d(c1, c1, 5, stride=1, padding=8, groups=c1, dilation=4)
-        self.conv_spatial = nn.Conv2d(c1, c1, 7, stride=1, padding=9, groups=c1, dilation=3)
-        self.conv_spatial3 = nn.Conv2d(c1, c1, 9, stride=1, padding=9, groups=c1, dilation=3)
-        self.conv1 = nn.Conv2d(c1, c1, 1)
-
-    def forward(self, x):
-        u = x.clone()
-        attn = self.conv0(x)
-        attn = self.conv_spatial(attn)
-        attn = self.conv1(attn)
-
-        return u * attn
-
-
-class LKA_CABlock(nn.Module):
-    def __init__(self, c1, c2, shortcut=True):
-        super(LKA_CABlock, self).__init__()
-        assert c1 == c2, "mustn't change channels"
-        c_ = int(c1 // 2)
-        c__ = int(c_ * 2)
-        self.conv1 = nn.Conv2d(c_, c__, 1)
-        self.lka = LKA(c__)
-        self.conv2 = nn.Conv2d(c__, c_, 3, 1, 1)
-        self.ca = CoordAtt(c_, c_)
-        self.shortcut = shortcut
-
-    def forward(self, x):
-        residual = x
-        x = torch.chunk(x, 2, 1)
-        output_1 = self.conv2(self.lka(self.conv1(x[0])))
-        output_2 = self.ca(x[1])
-        if self.shortcut:
-            return residual + torch.cat((output_1, output_2), dim=1)
-        else:
-            return torch.cat((output_1, output_2), dim=1)
-
-
 class selayer(nn.Module):
     def __init__(self, c1, c2, ratio=16) -> None:
         super(selayer, self).__init__()
@@ -1241,14 +741,222 @@ class selayer(nn.Module):
         return x * y.expand_as(x)
 
 
+# https://arxiv.org/abs/2108.01072
+def spatial_shift1(x):
+    b, w, h, c = x.size()
+    x[:, 1:, :, :c // 4] = x[:, :w - 1, :, :c // 4]
+    x[:, :w - 1, :, c // 4:c // 2] = x[:, 1:, :, c // 4:c // 2]
+    x[:, :, 1:, c // 2:c * 3 // 4] = x[:, :, :h - 1, c // 2:c * 3 // 4]
+    x[:, :, :h - 1, 3 * c // 4:] = x[:, :, 1:, 3 * c // 4:]
+    return x
+
+
+def spatial_shift2(x):
+    b, w, h, c = x.size()
+    x[:, :, 1:, :c // 4] = x[:, :, :h - 1, :c // 4]
+    x[:, :, :h - 1, c // 4:c // 2] = x[:, :, 1:, c // 4:c // 2]
+    x[:, 1:, :, c // 2:c * 3 // 4] = x[:, :w - 1, :, c // 2:c * 3 // 4]
+    x[:, :w - 1, :, 3 * c // 4:] = x[:, 1:, :, 3 * c // 4:]
+    return x
+
+
+class SplitAttention(nn.Module):
+    def __init__(self, channel, k=3):
+        super().__init__()
+        self.channel = channel
+        self.k = k
+        self.mlp1 = nn.Linear(channel, channel, bias=False)
+        self.gelu = nn.GELU()
+        self.mlp2 = nn.Linear(channel, channel * k, bias=False)
+        self.softmax = nn.Softmax(1)
+
+    def forward(self, x_all):
+        b, k, h, w, c = x_all.shape
+        x_all = x_all.reshape(b, k, -1, c)
+        a = torch.sum(torch.sum(x_all, 1), 1)
+        hat_a = self.mlp2(self.gelu(self.mlp1(a)))
+        hat_a = hat_a.reshape(b, self.k, c)
+        bar_a = self.softmax(hat_a)
+        attention = bar_a.unsqueeze(-2)
+        out = attention * x_all
+        out = torch.sum(out, 1).reshape(b, h, w, c)
+        return out
+
+
+class S2Attention(nn.Module):
+
+    def __init__(self, channels, out_channel=512):
+        super().__init__()
+        self.mlp1 = nn.Linear(channels, channels * 3)
+        self.mlp2 = nn.Linear(channels, channels)
+        self.split_attention = SplitAttention(channels)
+
+    def forward(self, x):
+        b, c, w, h = x.size()
+        x = x.permute(0, 2, 3, 1)
+        x = self.mlp1(x)
+        x1 = spatial_shift1(x[:, :, :, :c])
+        x2 = spatial_shift2(x[:, :, :, c:c * 2])
+        x3 = x[:, :, :, c * 2:]
+        x_all = torch.stack([x1, x2, x3], 1)
+        a = self.split_attention(x_all)
+        x = self.mlp2(a)
+        x = x.permute(0, 3, 1, 2)
+        return x
+
+
+'''
+This code is borrowed from Serge-weihao/CCNet-Pure-Pytorch
+'''
+
+
+def INF(B, H, W):
+    return -torch.diag(torch.tensor(float("inf")).repeat(H), 0).unsqueeze(0).repeat(B * W, 1, 1)
+
+
+class CrissCrossAttention(nn.Module):
+    """ Criss-Cross Attention Module"""
+
+    def __init__(self, in_dim, out_dim):
+        super(CrissCrossAttention, self).__init__()
+        self.query_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim, kernel_size=1)
+        self.softmax = nn.Softmax(dim=3)
+        self.INF = INF
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        m_batchsize, _, height, width = x.size()
+        proj_query = self.query_conv(x)
+        proj_query_H = proj_query.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height).permute(0, 2,
+                                                                                                                 1)
+        proj_query_W = proj_query.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width).permute(0, 2,
+                                                                                                                 1)
+        proj_key = self.key_conv(x)
+        proj_key_H = proj_key.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height)
+        proj_key_W = proj_key.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width)
+        proj_value = self.value_conv(x)
+        proj_value_H = proj_value.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height)
+        proj_value_W = proj_value.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width)
+        energy_H = (torch.bmm(proj_query_H, proj_key_H) + self.INF(m_batchsize, height, width)).view(m_batchsize, width,
+                                                                                                     height,
+                                                                                                     height).permute(0,
+                                                                                                                     2,
+                                                                                                                     1,
+                                                                                                                     3)
+        energy_W = torch.bmm(proj_query_W, proj_key_W).view(m_batchsize, height, width, width)
+        concate = self.softmax(torch.cat([energy_H, energy_W], 3))
+
+        att_H = concate[:, :, :, 0:height].permute(0, 2, 1, 3).contiguous().view(m_batchsize * width, height, height)
+        # print(concate)
+        # print(att_H)
+        att_W = concate[:, :, :, height:height + width].contiguous().view(m_batchsize * height, width, width)
+        out_H = torch.bmm(proj_value_H, att_H.permute(0, 2, 1)).view(m_batchsize, width, -1, height).permute(0, 2, 3, 1)
+        out_W = torch.bmm(proj_value_W, att_W.permute(0, 2, 1)).view(m_batchsize, height, -1, width).permute(0, 2, 1, 3)
+        # print(out_H.size(),out_W.size())
+        return self.gamma * (out_H + out_W) + x
+
+
+# https://arxiv.org/pdf/2102.00240.pdf
+class ShuffleAttention(nn.Module):
+
+    def __init__(self, channel=512, reduction=16, G=8):
+        super().__init__()
+        self.G = G
+        self.channel = channel
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.gn = nn.GroupNorm(channel // (2 * G), channel // (2 * G))
+        self.cweight = Parameter(torch.zeros(1, channel // (2 * G), 1, 1))
+        self.cbias = Parameter(torch.ones(1, channel // (2 * G), 1, 1))
+        self.sweight = Parameter(torch.zeros(1, channel // (2 * G), 1, 1))
+        self.sbias = Parameter(torch.ones(1, channel // (2 * G), 1, 1))
+        self.sigmoid = nn.Sigmoid()
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                init.constant_(m.weight, 1)
+                init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                init.normal_(m.weight, std=0.001)
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
+
+    @staticmethod
+    def channel_shuffle(x, groups):
+        b, c, h, w = x.shape
+        x = x.reshape(b, groups, -1, h, w)
+        x = x.permute(0, 2, 1, 3, 4)
+
+        # flatten
+        x = x.reshape(b, -1, h, w)
+
+        return x
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        # group into subfeatures
+        x = x.view(b * self.G, -1, h, w)  # bs*G,c//G,h,w
+
+        # channel_split
+        x_0, x_1 = x.chunk(2, dim=1)  # bs*G,c//(2*G),h,w
+
+        # channel attention
+        x_channel = self.avg_pool(x_0)  # bs*G,c//(2*G),1,1
+        x_channel = self.cweight * x_channel + self.cbias  # bs*G,c//(2*G),1,1
+        x_channel = x_0 * self.sigmoid(x_channel)
+
+        # spatial attention
+        x_spatial = self.gn(x_1)  # bs*G,c//(2*G),h,w
+        x_spatial = self.sweight * x_spatial + self.sbias  # bs*G,c//(2*G),h,w
+        x_spatial = x_1 * self.sigmoid(x_spatial)  # bs*G,c//(2*G),h,w
+
+        # concatenate along channel axis
+        out = torch.cat([x_channel, x_spatial], dim=1)  # bs*G,c//G,h,w
+        out = out.contiguous().view(b, -1, h, w)
+
+        # channel shuffle
+        out = self.channel_shuffle(out, 2)
+        return out
+
+
+class C3CCA(C3):
+    # C3 module with TransformerBlock()
+    def __init__(self, c1, c2, n=4, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = nn.Sequential(*(CrissCrossAttention(c_, c_) for _ in range(n)))
+
+
+class C3S2(C3):
+    # C3 module with TransformerBlock()
+    def __init__(self, c1, c2, n=4, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = nn.Sequential(*(S2Attention(c_, c_) for _ in range(n)))
+
+
+class C3SA(C3):
+    # C3 module with TransformerBlock()
+    def __init__(self, c1, c2, n=4, shortcut=True, g=1, e=0.5):
+        super().__init__(c1, c2, n, shortcut, g, e)
+        c_ = int(c2 * e)
+        self.m = nn.Sequential(*(ShuffleAttention(c_) for _ in range(n)))
+
+
 class HRBlock_SE(nn.Module):
     def __init__(self, c1, c2, shortcut=True):
         super(HRBlock_SE, self).__init__()
         assert c1 == c2, "must match channels"
         self.extract = nn.Sequential(
-            DSConv(c1, c1, 3, 1, act=False),
+            ConvACON(c1, c1, 3, 1, act=False),
             selayer(c1, c2),
-            DSConv_A(c2, c2, 3, 1)
+            ConvACON(c2, c2, 3, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
@@ -1292,8 +1000,17 @@ class HRStage_SE_LK(nn.Module):
         return self.m(x)
 
 
-# test = HRStage_SE_LK(128, 128)
-# input = torch.rand(1, 128, 160, 160)
+# test = HRBlock_SE_LK(256, 256)
+# input = torch.rand(1, 256, 80, 80)
+#
+# startTime = time.time()
+# output = test(input)
+# endTime = time.time()
+# print(endTime - startTime)
+# print(output.shape)
+#
+# test = HRBlock_SE_LK(1024, 1024)
+# input = torch.rand(1, 1024, 20, 20)
 #
 # startTime = time.time()
 # output = test(input)
@@ -1302,23 +1019,3 @@ class HRStage_SE_LK(nn.Module):
 # print(output.shape)
 
 
-# test = ADiCBlock(512, 512, 3)
-#
-# input = torch.rand(1, 512, 40, 40)
-# start = time.time()
-# output = test(input)
-# end = time.time()
-# print(output.shape)
-# print(end-start)
-
-
-# test = Add_Bi(5)
-#
-# input1 = [torch.rand(1, 64, 20, 20),
-#           torch.rand(1, 64, 1, 1),
-#           torch.rand(1, 64, 20, 20),
-#           torch.rand(1, 64, 20, 20),
-#           torch.rand(1, 64, 20, 20)]
-#
-# output1 = test(input1)
-# print(output1.shape)

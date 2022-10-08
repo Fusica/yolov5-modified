@@ -3,12 +3,12 @@
 # Parameters
 nc: 80  # number of classes
 depth_multiple: 0.33  # model depth multiple
-width_multiple: 0.5  # layer channel multiple
+width_multiple: 0.25  # layer channel multiple
 anchors:
   - [3,4, 3,7, 6,5]
-  - [5,10, 10,8, 8,15]
-  - [17,9, 14,18, 26,15]
-  - [21,31, 41,22, 51,48]
+  - [5,11, 10,8, 8,15]
+  - [17,9, 13,18, 25,15]
+  - [21,30, 41,23, 51,48]
 
 # YOLOv5 v6.0 backbone
 backbone:
@@ -29,7 +29,7 @@ backbone:
    [[7, 9], 1, Add_Bi, [2]],
    [10, 1, HRStage_SE, [128]],          # 13
    [11, 1, HRStage_SE, [256]],          # 14
-   [12, 3, HRStage_SE_LK, [512]],          # 15
+   [12, 1, HRStage_SE_LK, [512]],          # 15
 
    [13, 1, Downsample, [256, 1]],    # 16  Start of first layer
    [13, 1, Downsample, [512, 2]],
@@ -46,7 +46,7 @@ backbone:
    [[18, 21, 24], 1, Add_Bi, [3]],   # 28
    [25, 1, HRStage_SE, [128]],          # 29
    [26, 1, HRStage_SE, [256]],          # 30
-   [27, 3, HRStage_SE_LK, [512]],          # 31
+   [27, 1, HRStage_SE_LK, [512]],          # 31
    [28, 3, HRStage_SE_LK, [1024]],          # 32
 
    [29, 1, Downsample, [256, 1]],    # 33  Start of first layer
@@ -72,7 +72,7 @@ backbone:
    [[36, 40, 44, 48], 1, Add_Bi, [4]],
    [49, 1, HRStage_SE, [128]],          # 54
    [50, 1, HRStage_SE, [256]],          # 55
-   [51, 3, HRStage_SE_LK, [512]],          # 56
+   [51, 1, HRStage_SE_LK, [512]],          # 56
    [52, 3, HRStage_SE_LK, [1024]],             # 57
    [53, 3, C3CoaT, [2048]],             # 58
 
