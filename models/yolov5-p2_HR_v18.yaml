@@ -13,8 +13,8 @@ anchors:
 # YOLOv5 v6.0 backbone
 backbone:
   # [from, number, module, args]
-  [[-1, 1, DSConv_A, [64, 6, 2, 2]], # 0   P1/2
-   [-1, 1, DSConv_A, [128, 3, 2]],   # 1   P2/4
+  [[-1, 1, Conv, [64, 6, 2, 2]], # 0   P1/2
+   [-1, 1, Conv, [128, 3, 2]],   # 1   P2/4
    [-1, 1, HRStage_SE, [128]],       # 2
    [-1, 1, DSConv_A, [256, 3, 2]],   # 3   P3/8
    [2, 1, HRStage_SE, [128]],           # 4
@@ -47,7 +47,7 @@ backbone:
    [25, 1, HRStage_SE, [128]],          # 29
    [26, 1, HRStage_SE, [256]],          # 30
    [27, 1, HRStage_SE_LK, [512]],          # 31
-   [28, 6, C3CCA, [1024]],          # 32
+   [28, 1, HRStage_SE_LK, [1024]],          # 32
 
    [29, 1, Downsample, [256, 1]],    # 33  Start of first layer
    [29, 1, Downsample, [512, 2]],
@@ -73,8 +73,8 @@ backbone:
    [49, 1, HRStage_SE, [128]],          # 54
    [50, 1, HRStage_SE, [256]],          # 55
    [51, 1, HRStage_SE_LK, [512]],          # 56
-   [52, 6, C3CCA, [1024]],             # 57
-   [53, 9, C3CCA, [2048]],             # 58
+   [52, 1, HRStage_SE_LK, [1024]],             # 57
+   [53, 6, C3CoaT, [2048]],             # 58
 
    [54, 1, Downsample, [256, 1]],       # 59  Start of first layer
    [54, 1, Downsample, [512, 2]],

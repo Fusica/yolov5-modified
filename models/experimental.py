@@ -590,7 +590,7 @@ class Downsample(nn.Module):
             outchannel = [self.inchannel * 2, self.inchannel * 4, self.inchannel * 8, self.outchannel]
 
         for i in range(self.num):
-            layer.append(DSConv_A(inchannel[i], outchannel[i], 3, 2, 1))
+            layer.append(DSConv(inchannel[i], outchannel[i], 3, 2, 1))
         return nn.Sequential(*layer)
 
     def forward(self, x):
@@ -609,8 +609,7 @@ class Add_Bi(nn.Module):  # pairwise add
         # self.act= nn.SiLU()  #这里原本用silu，但是用途应该是保证权重是0-1之间 所以改成relu
         self.act = nn.ReLU()
 
-    def forward(self, x):  # mutil-layer 1-3 layers
-        # print("bifpn:",x.shape)
+    def forward(self, x):  # mutil-layer 2-5 layers
         if len(x) == 2:
             # w = self.relu(self.w1)
             w = self.w1
@@ -954,9 +953,9 @@ class HRBlock_SE(nn.Module):
         super(HRBlock_SE, self).__init__()
         assert c1 == c2, "must match channels"
         self.extract = nn.Sequential(
-            ConvACON(c1, c1, 3, 1, act=False),
+            Conv(c1, c1, 3, 1, act=False),
             selayer(c1, c2),
-            ConvACON(c2, c2, 3, 1)
+            Conv(c2, c2, 3, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
         self.residual = shortcut and c1 == c2
