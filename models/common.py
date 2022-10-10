@@ -10,6 +10,7 @@ import warnings
 from collections import OrderedDict, namedtuple
 from copy import copy
 from pathlib import Path
+from time import time
 
 import cv2
 import numpy as np
@@ -176,7 +177,7 @@ class C3TR(C3):
 
 class C3SPP(C3):
     # C3 module with SPP()
-    def __init__(self, c1, c2, k=(5, 9, 13), n=1, shortcut=True, g=1, e=0.5):
+    def __init__(self, c1, c2, n=1, shortcut=True, k=(5, 9, 13), g=1, e=0.5):
         super().__init__(c1, c2, n, shortcut, g, e)
         c_ = int(c2 * e)
         self.m = SPP(c_, c_, k)
@@ -762,10 +763,12 @@ class Classify(nn.Module):
         return self.flat(self.conv(z))  # flatten to x(b,c2)
 
 
-# test = Concat()
+# test = C3SPP(128, 128, 3)
 #
-# input1 = torch.rand(1, 64, 40, 40)
-# input2 = torch.rand(1, 64, 40, 40)
+# input1 = torch.rand(20, 128, 160, 160)
 #
-# output = test([input1, input2])
+# start = time()
+# output = test(input1)
+# end = time()
 # print(output.shape)
+# print(end - start)
