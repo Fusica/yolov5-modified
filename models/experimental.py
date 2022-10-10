@@ -908,7 +908,7 @@ class HRBlock_SE_LK(nn.Module):
         c_ = int(c1 * 0.5)
         self.extract = nn.Sequential(
             Conv(c1, c_, 1, 1, act=False),
-            DSConv(c_, c_, 17, 1, 8),
+            DSConv(c_, c_, 13, 1, 6),
             Conv(c_, c2, 1, 1)
         )
         self.bn = nn.BatchNorm2d(c1)
@@ -1019,8 +1019,8 @@ class C3BoT(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
-# test = C3BoT(128, 128, 3)
-# input = torch.rand(20, 128, 160, 160)
+# test = C3BoT(2048, 2048, 3)
+# input = torch.rand(1, 2048, 10, 9)
 #
 # startTime = time.time()
 # output = test(input)
