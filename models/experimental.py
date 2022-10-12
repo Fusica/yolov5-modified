@@ -1004,7 +1004,7 @@ class BottleneckTransformer(nn.Module):
 
 class C3BoT(nn.Module):
     # CSP Bottleneck with 3 convolutions
-    def __init__(self, c1, c2, n=1, e=0.5, e2=1, w=20, h=20):  # ch_in, ch_out, number, , expansion,w,h
+    def __init__(self, c1, c2, n=1, e=0.5, e2=1, w=10, h=10):  # ch_in, ch_out, number, , expansion,w,h
         super(C3BoT, self).__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, c_, 1, 1)
@@ -1019,8 +1019,8 @@ class C3BoT(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
-# test = C3BoT(2048, 2048, 3)
-# input = torch.rand(1, 2048, 10, 9)
+# test = C3BoT(4096, 2048, 3)
+# input = torch.rand(1, 4096, 10, 10)
 #
 # startTime = time.time()
 # output = test(input)
