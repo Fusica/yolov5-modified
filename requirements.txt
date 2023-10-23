@@ -41,6 +41,6 @@ psutil  # system utilization
 # pycocotools>=2.0  # COCO mAP
 # roboflow
 thop==0.0.31.post2005241907  # FLOPs computation
-timm~=0.5.4
+timm~=0.9.8
 einops
 ptflops
